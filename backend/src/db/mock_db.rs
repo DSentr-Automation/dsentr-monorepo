@@ -609,14 +609,6 @@ impl WorkflowRepository for NoopWorkflowRepository {
         ))
     }
 
-    async fn rotate_webhook_salt(
-        &self,
-        _user_id: Uuid,
-        _workflow_id: Uuid,
-    ) -> Result<Option<Uuid>, sqlx::Error> {
-        Ok(None)
-    }
-
     async fn cancel_workflow_run(
         &self,
         _user_id: Uuid,
@@ -804,31 +796,6 @@ impl WorkflowRepository for NoopWorkflowRepository {
         _allowlist: &[String],
     ) -> Result<bool, sqlx::Error> {
         Ok(true)
-    }
-
-    async fn update_webhook_config(
-        &self,
-        _user_id: Uuid,
-        _workflow_id: Uuid,
-        _require_hmac: bool,
-        _replay_window_sec: i32,
-    ) -> Result<bool, sqlx::Error> {
-        Ok(true)
-    }
-
-    async fn try_record_webhook_signature(
-        &self,
-        _workflow_id: Uuid,
-        _signature: &str,
-    ) -> Result<bool, sqlx::Error> {
-        Ok(true)
-    }
-
-    async fn purge_old_webhook_replays(
-        &self,
-        _older_than_seconds: i64,
-    ) -> Result<u64, sqlx::Error> {
-        Ok(0)
     }
 
     async fn insert_egress_block_event(

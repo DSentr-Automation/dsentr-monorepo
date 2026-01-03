@@ -44,7 +44,8 @@
                 "google",
                 "microsoft",
                 "slack",
-                "asana"
+                "asana",
+                "notion"
               ]
             }
           }

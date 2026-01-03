@@ -7,6 +7,8 @@ pub mod oauth_token;
 pub mod plan;
 pub mod signup;
 pub mod user;
+pub mod webhook_source;
+pub mod webhook_subscription;
 pub mod workflow;
 pub mod workflow_dead_letter;
 pub mod workflow_log;

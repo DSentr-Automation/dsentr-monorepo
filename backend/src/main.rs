@@ -73,13 +73,19 @@ use routes::{
         user_settings::{get_user_settings, update_user_settings},
     },
     slack::list_channels as list_slack_channels,
+    webhooks::{
+        create_webhook_source, create_webhook_subscription, create_webhook_subscription_for_source,
+        delete_webhook_source, delete_webhook_subscription, delete_webhook_subscription_by_id,
+        list_webhook_sources, list_webhook_subscriptions, list_webhook_subscriptions_for_source,
+        rotate_webhook_source_secret, update_webhook_source_enabled,
+        update_webhook_subscription_enabled, webhook_ingress,
+    },
     workflows::{
         cancel_all_runs_for_workflow, cancel_workflow_run, create_workflow, delete_workflow,
-        download_run_json, get_egress_allowlist, get_webhook_config, get_webhook_url, get_workflow,
-        get_workflow_run_status, list_dead_letters, list_runs_for_workflow, list_workflows,
-        regenerate_webhook_token, requeue_dead_letter, rerun_from_failed_node, rerun_workflow_run,
-        set_concurrency_limit, set_egress_allowlist, set_webhook_config, sse_run_events,
-        start_workflow_run, update_workflow, webhook_trigger,
+        download_run_json, get_egress_allowlist, get_workflow, get_workflow_run_status,
+        list_dead_letters, list_runs_for_workflow, list_workflows, requeue_dead_letter,
+        rerun_from_failed_node, rerun_workflow_run, set_concurrency_limit, set_egress_allowlist,
+        sse_run_events, start_workflow_run, update_workflow,
     },
 };
 use services::oauth::account_service::OAuthAccountService;
@@ -495,19 +501,6 @@ async fn main() -> Result<()> {
             "/{workflow_id}/runs/events-stream",
             get(routes::workflows::sse_workflow_runs),
         )
-        .route("/{workflow_id}/webhook-url", get(get_webhook_url))
-        .route(
-            "/{workflow_id}/webhook/config",
-            get(get_webhook_config).post(set_webhook_config),
-        )
-        .route(
-            "/{workflow_id}/webhook/regenerate",
-            post(regenerate_webhook_token),
-        )
-        .route(
-            "/{workflow_id}/webhook/signing-key/regenerate",
-            post(routes::workflows::regenerate_webhook_signing_key),
-        )
         .route(
             "/{workflow_id}/egress",
             get(get_egress_allowlist).post(set_egress_allowlist),
@@ -596,6 +589,38 @@ async fn main() -> Result<()> {
         .route(
             "/{workspace_id}/connections/{connection_id}",
             delete(routes::workspaces::remove_workspace_connection),
+        )
+        .route(
+            "/{workspace_id}/webhooks/sources",
+            get(list_webhook_sources).post(create_webhook_source),
+        )
+        .route(
+            "/{workspace_id}/webhooks/sources/{source_id}",
+            put(update_webhook_source_enabled).delete(delete_webhook_source),
+        )
+        .route(
+            "/{workspace_id}/webhooks/sources/{source_id}/rotate-secret",
+            post(rotate_webhook_source_secret),
+        )
+        .route(
+            "/{workspace_id}/webhooks/sources/{source_id}/subscriptions",
+            get(list_webhook_subscriptions).post(create_webhook_subscription),
+        )
+        .route(
+            "/{workspace_id}/webhooks/sources/{source_id}/subscriptions/{subscription_id}",
+            put(update_webhook_subscription_enabled).delete(delete_webhook_subscription),
+        )
+        .layer(csrf_layer.clone())
+        .layer(session_guard.clone());
+
+    let webhook_subscription_routes = Router::new()
+        .route(
+            "/webhook-sources/{source_id}/subscriptions",
+            get(list_webhook_subscriptions_for_source).post(create_webhook_subscription_for_source),
+        )
+        .route(
+            "/subscriptions/{subscription_id}",
+            delete(delete_webhook_subscription_by_id),
         )
         .layer(csrf_layer.clone())
         .layer(session_guard.clone());
@@ -687,13 +712,6 @@ async fn main() -> Result<()> {
             config: global_governor_conf.clone(),
         });
 
-    // Public webhook route (no CSRF, no auth)
-    let public_workflow_routes = Router::new()
-        .route("/{workflow_id}/trigger/{token}", post(webhook_trigger))
-        .route(
-            "/{workflow_id}/trigger/{token}/{trigger_label}",
-            post(webhook_trigger),
-        );
     let invite_private_routes = Router::new()
         .route("/invites", get(routes::workspaces::list_pending_invites))
         .route(
@@ -753,13 +771,13 @@ async fn main() -> Result<()> {
         )
         // New consolidated Stripe webhook path
         .route("/api/stripe/webhook", post(routes::stripe::webhook))
+        // Public inbound webhook ingress (source-scoped)
+        .route("/api/webhooks/{source_id}", post(webhook_ingress))
         .nest("/api/auth", auth_routes) // <-- your auth routes with CSRF selectively applied
         .nest("/api/account", account_routes)
-        .nest(
-            "/api/workflows",
-            workflow_routes.merge(public_workflow_routes),
-        )
+        .nest("/api/workflows", workflow_routes)
         .nest("/api/workspaces", workspace_routes)
+        .merge(Router::new().nest("/api", webhook_subscription_routes))
         .merge(dashboard_routes)
         .merge(Router::new().nest("/api", invite_routes))
         .merge(Router::new().nest("/api", issue_routes))

@@ -5,6 +5,8 @@ use std::time::Duration;
 #[cfg(test)]
 use std::sync::Arc;
 
+use crate::db::postgres_webhook_ingress_dedupe_repository::PostgresWebhookIngressDedupeRepository;
+use crate::db::webhook_ingress_dedupe_repository::WebhookIngressDedupeRepository;
 use crate::engine::actions::{ensure_run_membership, ensure_workspace_plan};
 use crate::engine::{complete_run_with_retry, execute_run, ExecutorError};
 use crate::models::workflow::Workflow;
@@ -41,6 +43,7 @@ fn test_jwt_keys() -> Arc<JwtKeys> {
 const DEFAULT_NOTION_POLL_INTERVAL_SECONDS: i64 = 300;
 const MIN_NOTION_POLL_INTERVAL_SECONDS: i64 = 30;
 const MAX_NOTION_POLL_INTERVAL_SECONDS: i64 = 3600;
+const WEBHOOK_DEDUPE_CLEANUP_INTERVAL_SECS: u64 = 86_400;
 
 pub async fn start_background_workers(state: AppState) {
     // Simple single-worker for now. Can be extended to multiple tasks.
@@ -64,6 +67,7 @@ async fn worker_loop(state: AppState) -> Result<(), ExecutorError> {
         .and_then(|v| v.parse::<i32>().ok())
         .unwrap_or(30);
     let mut last_cleanup = std::time::Instant::now();
+    let mut last_dedupe_cleanup = std::time::Instant::now();
     let mut last_schedule_check = std::time::Instant::now();
     let use_leases = std::env::var("WORKER_USE_LEASES")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -91,6 +95,21 @@ async fn worker_loop(state: AppState) -> Result<(), ExecutorError> {
                 );
             }
             last_cleanup = std::time::Instant::now();
+        }
+
+        if last_dedupe_cleanup.elapsed() > Duration::from_secs(WEBHOOK_DEDUPE_CLEANUP_INTERVAL_SECS)
+        {
+            let dedupe_repo = PostgresWebhookIngressDedupeRepository {
+                pool: (*state.db_pool).clone(),
+            };
+            if let Err(err) = dedupe_repo.purge_old_dedupe_entries().await {
+                warn!(
+                    worker_id = %state.worker_id,
+                    error = ?err,
+                    "worker: failed to purge webhook ingress dedupe entries"
+                );
+            }
+            last_dedupe_cleanup = std::time::Instant::now();
         }
 
         if last_schedule_check.elapsed() > Duration::from_secs(5) {
@@ -397,6 +416,13 @@ async fn trigger_schedule(state: &AppState, schedule: WorkflowSchedule) -> Resul
             .collect(),
     );
 
+    let trigger_meta =
+        find_schedule_trigger_start_node(&snapshot, &schedule.config).map(|start_id| {
+            let meta = build_trigger_context_meta(&snapshot, &start_id, "schedule");
+            snapshot["_start_from_node"] = Value::String(start_id);
+            meta
+        });
+
     let mut context = snapshot
         .get("_trigger_context")
         .cloned()
@@ -420,11 +446,10 @@ async fn trigger_schedule(state: &AppState, schedule: WorkflowSchedule) -> Resul
             "scheduleConfig": schedule.config.clone(),
         });
     }
-    snapshot["_trigger_context"] = context;
-
-    if let Some(start_id) = find_schedule_trigger_start_node(&snapshot, &schedule.config) {
-        snapshot["_start_from_node"] = Value::String(start_id);
+    if let Some(meta) = trigger_meta.as_ref() {
+        context = merge_trigger_context(context, meta, "schedule");
     }
+    snapshot["_trigger_context"] = context;
 
     let connection_metadata = workflow_connection_metadata::collect(&snapshot);
     workflow_connection_metadata::embed(&mut snapshot, &connection_metadata);
@@ -856,13 +881,16 @@ async fn trigger_notion_schedule(
         obj.remove("_trigger_context");
     }
 
-    if let Some(start_id) = find_trigger_start_node_by_type(
+    let trigger_meta = find_trigger_start_node_by_type(
         &base_snapshot,
         notion_kind.as_str(),
         Some(&schedule_config),
-    ) {
+    )
+    .map(|start_id| {
+        let meta = build_trigger_context_meta(&base_snapshot, &start_id, "schedule");
         base_snapshot["_start_from_node"] = Value::String(start_id);
-    }
+        meta
+    });
 
     let connection_metadata = workflow_connection_metadata::collect(&base_snapshot);
     workflow_connection_metadata::embed(&mut base_snapshot, &connection_metadata);
@@ -895,8 +923,12 @@ async fn trigger_notion_schedule(
         }
 
         let mut snapshot = base_snapshot.clone();
-        snapshot["_trigger_context"] =
+        let mut context =
             build_notion_trigger_context(event, &schedule, &schedule_config, scheduled_for);
+        if let Some(meta) = trigger_meta.as_ref() {
+            context = merge_trigger_context(context, meta, "schedule");
+        }
+        snapshot["_trigger_context"] = context;
 
         let mut workspace_quota: Option<WorkspaceRunQuotaTicket> = None;
         let mut skip_run = false;
@@ -1137,6 +1169,66 @@ fn read_config_string(value: Option<&Value>) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+struct TriggerContextMeta {
+    node_id: String,
+    trigger_type: String,
+}
+
+fn trigger_type_for_node(snapshot: &Value, node_id: &str) -> Option<String> {
+    let nodes = snapshot.get("nodes")?.as_array()?;
+    for node in nodes {
+        let Some(id) = node.get("id").and_then(|value| value.as_str()) else {
+            continue;
+        };
+        if id != node_id {
+            continue;
+        }
+        return node
+            .get("data")
+            .and_then(|value| value.get("triggerType"))
+            .and_then(|value| value.as_str())
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_ascii_lowercase());
+    }
+    None
+}
+
+fn build_trigger_context_meta(
+    snapshot: &Value,
+    node_id: &str,
+    fallback_type: &str,
+) -> TriggerContextMeta {
+    let trigger_type =
+        trigger_type_for_node(snapshot, node_id).unwrap_or_else(|| fallback_type.to_string());
+    TriggerContextMeta {
+        node_id: node_id.to_string(),
+        trigger_type,
+    }
+}
+
+fn merge_trigger_context(mut context: Value, meta: &TriggerContextMeta, source: &str) -> Value {
+    if let Value::Object(ref mut map) = context {
+        map.insert(
+            "trigger_node_id".to_string(),
+            Value::String(meta.node_id.clone()),
+        );
+        map.insert(
+            "trigger_type".to_string(),
+            Value::String(meta.trigger_type.clone()),
+        );
+        map.insert("source".to_string(), Value::String(source.to_string()));
+    } else {
+        context = json!({
+            "trigger_node_id": meta.node_id,
+            "trigger_type": meta.trigger_type,
+            "source": source,
+            "payload": context,
+        });
+    }
+    context
+}
+
 fn find_schedule_trigger_start_node(snapshot: &Value, schedule_config: &Value) -> Option<String> {
     let nodes = snapshot.get("nodes")?.as_array()?;
     let mut fallback: Option<String> = None;
@@ -1287,12 +1379,12 @@ mod tests {
                 webhook_secret: "0123456789abcdef0123456789ABCDEF".into(),
             },
             auth_cookie_secure: true,
-            webhook_secret: "0123456789abcdef0123456789ABCDEF".into(),
             jwt_issuer: "test-issuer".into(),
             jwt_audience: "test-audience".into(),
             workspace_member_limit: DEFAULT_WORKSPACE_MEMBER_LIMIT,
             workspace_monthly_run_limit: DEFAULT_WORKSPACE_MONTHLY_RUN_LIMIT,
             runaway_limit_5min: RUNAWAY_LIMIT_5MIN,
+            webhook_ingress_dedupe_mode: crate::config::WebhookIngressDedupeMode::Off,
         });
 
         AppState {
@@ -1532,12 +1624,12 @@ mod tests {
                 webhook_secret: "0123456789abcdef0123456789ABCDEF".into(),
             },
             auth_cookie_secure: true,
-            webhook_secret: "0123456789abcdef0123456789ABCDEF".into(),
             jwt_issuer: "test-issuer".into(),
             jwt_audience: "test-audience".into(),
             workspace_member_limit: DEFAULT_WORKSPACE_MEMBER_LIMIT,
             workspace_monthly_run_limit: DEFAULT_WORKSPACE_MONTHLY_RUN_LIMIT,
             runaway_limit_5min: RUNAWAY_LIMIT_5MIN,
+            webhook_ingress_dedupe_mode: crate::config::WebhookIngressDedupeMode::Off,
         });
 
         let state = AppState {
@@ -1735,12 +1827,12 @@ mod tests {
                 webhook_secret: "0123456789abcdef0123456789ABCDEF".into(),
             },
             auth_cookie_secure: true,
-            webhook_secret: "0123456789abcdef0123456789ABCDEF".into(),
             jwt_issuer: "test-issuer".into(),
             jwt_audience: "test-audience".into(),
             workspace_member_limit: DEFAULT_WORKSPACE_MEMBER_LIMIT,
             workspace_monthly_run_limit: DEFAULT_WORKSPACE_MONTHLY_RUN_LIMIT,
             runaway_limit_5min: RUNAWAY_LIMIT_5MIN,
+            webhook_ingress_dedupe_mode: crate::config::WebhookIngressDedupeMode::Off,
         });
 
         let state = AppState {
@@ -1821,9 +1913,6 @@ mod tests {
             }),
             concurrency_limit: 1,
             egress_allowlist: vec![],
-            require_hmac: false,
-            hmac_replay_window_sec: 0,
-            webhook_salt: Uuid::new_v4(),
             locked_by: None,
             locked_at: None,
             created_at: OffsetDateTime::now_utc(),
@@ -1947,12 +2036,12 @@ mod tests {
                 webhook_secret: "0123456789abcdef0123456789ABCDEF".into(),
             },
             auth_cookie_secure: true,
-            webhook_secret: "0123456789abcdef0123456789ABCDEF".into(),
             jwt_issuer: "test-issuer".into(),
             jwt_audience: "test-audience".into(),
             workspace_member_limit: DEFAULT_WORKSPACE_MEMBER_LIMIT,
             workspace_monthly_run_limit: DEFAULT_WORKSPACE_MONTHLY_RUN_LIMIT,
             runaway_limit_5min: RUNAWAY_LIMIT_5MIN,
+            webhook_ingress_dedupe_mode: crate::config::WebhookIngressDedupeMode::Off,
         });
 
         let state = AppState {
@@ -2053,9 +2142,6 @@ mod tests {
             }),
             concurrency_limit: 1,
             egress_allowlist: vec![],
-            require_hmac: false,
-            hmac_replay_window_sec: 300,
-            webhook_salt: Uuid::new_v4(),
             locked_by: None,
             locked_at: None,
             created_at: OffsetDateTime::now_utc(),
@@ -2120,12 +2206,12 @@ mod tests {
                 webhook_secret: "0123456789abcdef0123456789ABCDEF".into(),
             },
             auth_cookie_secure: true,
-            webhook_secret: "0123456789abcdef0123456789ABCDEF".into(),
             jwt_issuer: "test-issuer".into(),
             jwt_audience: "test-audience".into(),
             workspace_member_limit: DEFAULT_WORKSPACE_MEMBER_LIMIT,
             workspace_monthly_run_limit: DEFAULT_WORKSPACE_MONTHLY_RUN_LIMIT,
             runaway_limit_5min: RUNAWAY_LIMIT_5MIN,
+            webhook_ingress_dedupe_mode: crate::config::WebhookIngressDedupeMode::Off,
         });
 
         let state = AppState {
@@ -2279,12 +2365,12 @@ mod tests {
                 webhook_secret: "0123456789abcdef0123456789ABCDEF".into(),
             },
             auth_cookie_secure: true,
-            webhook_secret: "0123456789abcdef0123456789ABCDEF".into(),
             jwt_issuer: "test-issuer".into(),
             jwt_audience: "test-audience".into(),
             workspace_member_limit: DEFAULT_WORKSPACE_MEMBER_LIMIT,
             workspace_monthly_run_limit: DEFAULT_WORKSPACE_MONTHLY_RUN_LIMIT,
             runaway_limit_5min: 1,
+            webhook_ingress_dedupe_mode: crate::config::WebhookIngressDedupeMode::Off,
         });
 
         let state = AppState {

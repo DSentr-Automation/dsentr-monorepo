@@ -48,3 +48,9 @@
  - Wired Asana OAuth settings into AppState so services can use the new provider alongside existing Google/Microsoft/Slack integrations.
 - Config loading honors `DOTENV_DISABLE_BACKEND=1` to skip the repository `.env`, and config tests set/restore the flag so local environment files do not hide missing-variable failures.
 - OAuth routing now includes provider-scoped connection listings, connection-id lookups, and connection-id aware refresh/revoke/disconnect endpoints wired in `main.rs` so targeted OAuth operations are available alongside legacy routes.
+- Main router now mounts the public webhook ingress endpoint for source-scoped inbound webhooks, keeping routing aligned with the new backend webhook routing layer.
+- Main router now mounts workspace webhook management routes, and `responses::JsonResponse` adds a success-with-data helper so control-plane webhook APIs stay consistent without exposing secrets.
+- Config now includes a webhook ingress dedupe mode flag to gate log-only vs enforce behavior.
+- Removed workflow-scoped webhook routing/config and dropped `WEBHOOK_SECRET` from config wiring so only source-scoped ingress remains mounted.
+- Main router now mounts source-scoped webhook subscription management routes for `/api/webhook-sources/:source_id/subscriptions` and `/api/subscriptions/:subscription_id`.
+- Marked the `success_with_data` JsonResponse helper as allowed dead code so the shared response utility stays available without clippy warnings.

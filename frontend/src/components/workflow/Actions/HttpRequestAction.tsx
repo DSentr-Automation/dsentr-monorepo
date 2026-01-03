@@ -308,9 +308,8 @@ export default function HttpRequestAction({
               This URL points at your DSentr API.
             </p>
             <p className="text-[11px] leading-relaxed text-amber-800 dark:text-amber-200">
-              Calling DSentr workflow webhooks from inside a workflow can create
-              a loop that rapidly consumes your runs and may incur overage
-              charges.
+              Calling DSentr endpoints from inside a workflow can create a loop
+              that rapidly consumes your runs and may incur overage charges.
             </p>
             <p className="text-[11px] leading-relaxed text-amber-800 dark:text-amber-200">
               Use an external endpoint or add guards to prevent the workflow

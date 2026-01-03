@@ -1,0 +1,78 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE webhook_sources\n            SET secret = $3\n            WHERE workspace_id = $1\n              AND id = $2\n            RETURNING id,\n                      workspace_id,\n                      name,\n                      secret,\n                      require_hmac,\n                      replay_window_sec,\n                      last_seen_at,\n                      enabled,\n                      created_at,\n                      updated_at\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "workspace_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "secret",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "require_hmac",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 5,
+        "name": "replay_window_sec",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "last_seen_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "enabled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 8,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "705d3f89fb7b6548f601dab9171e92bcba2e097eafc28ed2cb26719f869bb9df"
+}

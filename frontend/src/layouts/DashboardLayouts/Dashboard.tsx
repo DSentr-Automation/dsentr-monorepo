@@ -12,6 +12,7 @@ import { selectCurrentWorkspace, useAuth } from '@/stores/auth'
 import { selectIsSaving, useWorkflowStore } from '@/stores/workflowStore'
 import {
   normalizeEdgeForPayload,
+  sanitizeData,
   sanitizeNodeData,
   sortById
 } from '@/lib/workflowGraph'
@@ -443,7 +444,7 @@ export default function Dashboard() {
           ...node,
           data:
             node?.data && typeof node.data === 'object'
-              ? cloneWorkflowData(node.data)
+              ? sanitizeData(cloneWorkflowData(node.data), node.type)
               : node.data
         })
       })
@@ -1282,6 +1283,24 @@ export default function Dashboard() {
 
     try {
       const { nodes, edges } = getGraph()
+      const webhookTriggerMissingEventType = nodes.some((node) => {
+        if (node.type !== 'trigger') return false
+        const data = node.data as
+          | { triggerType?: string; event_type?: string }
+          | undefined
+        const triggerType =
+          typeof data?.triggerType === 'string' ? data.triggerType : 'Manual'
+        const normalizedTriggerType =
+          triggerType.trim().toLowerCase() || 'manual'
+        if (normalizedTriggerType !== 'webhook') return false
+        const eventType =
+          typeof data?.event_type === 'string' ? data.event_type : ''
+        return !eventType.trim()
+      })
+      if (webhookTriggerMissingEventType) {
+        setError('Webhook triggers require an event type before saving.')
+        return false
+      }
       const cleanNodes = sortById(nodes.map(sanitizeNodeData))
       const cleanEdges = sortById(edges.map(normalizeEdgeForPayload))
       const payloadGraph = {

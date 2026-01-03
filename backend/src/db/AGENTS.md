@@ -6,7 +6,7 @@
 
 ## Modules
 - `user_repository.rs`: trait surface for all user/account operations (signup, password reset, plan upgrades, settings).
-- `workflow_repository.rs`: async trait covering workflow CRUD, run management, scheduling, dead-letter handling, and webhook utilities. Some rarely used methods are intentionally left unimplemented in mocks.
+- `workflow_repository.rs`: async trait covering workflow CRUD, run management, scheduling, and dead-letter handling. Some rarely used methods are intentionally left unimplemented in mocks.
 - `workspace_repository.rs`: trait for workspace CRUD, membership management, and invitation flows.
 - `oauth_token_repository.rs`: trait + `NewUserOAuthToken` DTO for storing encrypted OAuth connection tokens.
 - `postgres_*_repository.rs`: SQLx implementations of the above traits. Every method uses `query!`/`query_as!` macros for compile-time checked SQL.
@@ -55,3 +55,11 @@
 - Workspace connection repositories expose a `find_by_source_token` helper so shared connection refresh flows can locate and update dependent workspace credentials.
 - Workspace connection repositories now persist and list `connection_id` so workspace OAuth responses can return a stable connection identity.
 - Workspace connection repositories now provide a Slack team lookup and enforce Slack team-id invariants, with Postgres-backed queries using the new workspace/team index.
+- Added webhook source repository trait and Postgres implementation with encrypted secret handling and tests.
+- Added webhook subscription repository trait and Postgres implementation for webhook source trigger mappings.
+- Webhook source repositories now support id lookups and last-seen updates so ingress can resolve sources and track activity; webhook subscriptions can be queried by source/event with enabled filtering to keep routing logic focused.
+- Webhook source/subscription repositories now expose enable/disable updates so control-plane webhook management APIs can toggle active state with repo-enforced scoping.
+- Added webhook ingress dedupe repository helpers to insert delivery keys and purge retained entries per replay-window policy.
+- Removed workflow-scoped webhook token/replay helpers from workflow repositories, and workspace webhook-signing resets now target webhook sources instead of workflows.
+- Added webhook delivery repository helpers (trait + Postgres) so ingress can record delivery status updates without coupling to workflow transactions.
+- Allowed the webhook delivery `record_delivery` trait signature to keep its full parameter set without tripping clippy warnings.

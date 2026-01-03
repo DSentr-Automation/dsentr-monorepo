@@ -29,7 +29,7 @@
 - Google Sheets action: guard against automatically falling back to the personal credential after a shared workspace connection is removed by tracking when a workspace selection is cleared. This keeps users from silently swapping credentials and mirrors the React Flow safety patterns for avoiding redundant updates.
 - UI: Unified scrollbar theming across scrollable components to match the Settings modal.
 - Applied the shared `themed-scroll` utility class to elements with `overflow-auto`/`overflow-y-auto` for consistent, theme-aware scrollbars in light and dark modes.
-- Settings �+' Workflows: added a Runaway Protection toggle that reads/writes per-workspace `runaway_protection_enabled` via the options user-settings API with optimistic updates so users can disable the guard when needed.
+- Settings > Workflows: added a Runaway Protection toggle that reads/writes per-workspace `runaway_protection_enabled` via the options user-settings API with optimistic updates so users can disable the guard when needed.
 - TeamsAction: Prevented duplicate store writes for no-op input changes by tracking the last committed params in a ref and short-circuiting when the next state is identical. This avoids redundant `updateNodeData` calls that can cause render thrash in tests and the canvas.
 - Plan tab plan-usage refresh now scopes workspace requests to Workspace plans so solo users still load usage successfully.
 - SMTPAction: Improved accessibility of TLS radio options by marking helper text as `aria-hidden` and adding `aria-label` to radio inputs so `getByLabelText` works under jsdom. Also compute validation on each field change and include `hasValidationErrors` in the same `updateNodeData` payload to keep store state in sync with UI.
@@ -38,9 +38,16 @@
 - Members tab: Removed the ability to transfer ownership to another member so each user can retain ownership of only their own workspace.
 - RunCustomCodeAction: Added a lightweight help tooltip ("?") with concise guidance on how to reference inputs in code using `${inputs.*}`, how to map outputs to properties of a returned JSON object, and how to reference a primitive return via `${{<run code node name>.result}}`. Implemented with local state only to avoid unnecessary store writes and prevent canvas re-render loops.
 - WebhooksTab: Updated HMAC instructions to match backend behavior. Preferred header-based verification using `X-DSentr-Timestamp` and `X-DSentr-Signature` (HMAC over `ts + '.' + canonical_json_body` with base64url-decoded key). Documented legacy body fields (`_dsentr_ts`/`_dsentr_sig`) with signing over the body excluding those fields. Added copyable examples for Bash (curl), PowerShell, and Node.
-- WebhooksTab: Added positive confirmation states for the Signing Key "Copy" button ("Copied!") and HMAC settings "Save" button ("Saving…" → "Saved!") to clearly indicate the action was applied.
+- WebhooksTab: Added positive confirmation states for the Signing Key "Copy" button ("Copied!") and HMAC settings "Save" button ("Saving..." -> "Saved!") to clearly indicate the action was applied.
 - WebhooksTab: Restored copy-to-clipboard controls for the HMAC language examples and added a signing key rotation button that surfaces success state, refreshes the derived webhook URL, and warns that both credentials change together.
-- WebhooksTab: Displays per-trigger webhook endpoints (base URL plus trigger name), updates examples/copy helpers to use the selected trigger URL, and refreshes trigger lists when tokens or signing keys rotate.
+- WebhooksTab: Aligns ingress copy and examples to source endpoints and event_type routing for unified webhook ingress.
+- WebhooksTab: Added a Webhook Sources section for creating, listing, rotating, and deleting inbound sources with one-time secret reveal handling and endpoint copy actions.
+- WebhooksTab: Added per-source subscriptions lists plus create/delete flows so webhook routing is managed from Settings.
+- WebhooksTab: Documented webhook trigger detection assumptions so the subscriptions UI stays aligned with trigger schema changes.
+- WebhooksTab: Updated webhook ingress copy and examples to reflect source-scoped endpoints and event_type routing.
+- Workflow trigger config: webhook triggers now store only event_type, drop deprecated source fields during load/save, and require event_type before saving workflows.
+- Workflow editor: removed webhook-ingress warning copy from the HTTP Request action so inbound guidance stays in Settings > Webhooks.
+- Action node summaries now drop the legacy webhook action branch so the editor no longer surfaces obsolete webhook action details.
 - IntegrationsTab: Removed redundant client-side filtering of workspace OAuth connections by `workspaceId`. Backend now enforces workspace scoping for the connections listing endpoint, so the UI consumes the `workspace` array as returned.
 - Integrations connect buttons now request a workflow auto-save before redirecting to provider OAuth pages so unsaved canvas edits aren't lost during auth flows.
 - Node inline secret creation fields now disable browser/password-manager autofill (autocomplete off/new-password + lp/1p ignore) so quick-create flows don't get prefilled with unrelated credentials.
@@ -88,3 +95,6 @@ Styles live in `src/css/globals.css` under `.themed-scroll` and were previously 
 - Added a Formatter logic node UI with grouped dropdown selection, validation, and palette/flyout wiring so users can transform data without new components or custom styling.
 - Workflow nodes: dashed summary areas now show an explicit click affordance (hover overlay + pointer cursor) and open the flyout on mouseup without interfering with node dragging, fixing missed flyout openings when using the on-card hint zone.
 - Delay and Formatter nodes now use the same dashed hint surface to open their flyouts, matching the rest of the node cards.
+
+
+

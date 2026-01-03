@@ -15,20 +15,6 @@
 - `egress.rs`: Manage webhook/egress allowlists and blocked event history.
 - `plan.rs`: Surfaces usage metrics for the current plan tier.
 - `sse.rs`: Server-sent-event endpoints streaming run updates (global, per workflow, per run).
-- `webhooks.rs`: Public webhook trigger endpoint plus helper APIs to rotate tokens or toggle webhook security settings.
-
-### 2025-11-07 — HMAC verification update
-- Reason: Previous verification logic required `_dsentr_ts`/`_dsentr_sig` in the JSON body and computed the HMAC over a payload that included the signature itself, making client-side signing impractical. This also diverged from the Settings note that recommends header-based auth.
-- Change: `webhook_trigger` now supports header-based HMAC and fixes JSON-body verification.
-  - Preferred (recommended): headers `X-DSentr-Timestamp` and `X-DSentr-Signature: v1=<hex>` are accepted. The server verifies `HMAC_SHA256(signing_key, "<ts>.<canonical_json_body>")` where `canonical_json_body` is the minified body as parsed by `serde_json`.
-  - Legacy compatibility: if headers are absent, the server will read `_dsentr_ts`/`_dsentr_sig` from the JSON body and verify the same payload, but it will first remove `_dsentr_ts` and `_dsentr_sig` keys from the body before computing the signature.
-  - Replay protection and window enforcement remain unchanged.
-- Added `POST /api/workflows/:id/webhook/signing-key/regenerate` so admins can rotate the derived signing key (and webhook token) without visiting the token endpoint explicitly. Response returns both the new key and URL for UI refreshes.
-
-Operational notes:
-- Token validation is still required and occurs before HMAC verification.
-- The allowlist injection into the run snapshot is unchanged.
-- Keep the Settings help text aligned with the header-based flow above.
 
 ## Usage Tips
 - Always call `AppState::resolve_plan_tier` before performing plan-gated operations; helpers assume it was run.
@@ -45,6 +31,9 @@ Operational notes:
 - Run creation endpoints (manual, rerun, webhook) enforce runaway workflow protection per workspace and return `429` with `{"error":"runaway_protection_triggered"}` when the recent-run limit is exceeded.
 - Workflow log listing now validates workspace membership and includes entries from all actors; deletions emit workspace-scoped history records so change logs capture who removed workflows.
 - Added optimistic concurrency and workflow SSE streaming so workspace users get the latest graph automatically and stale saves return 409 with the authoritative payload.
-- Webhook trigger URLs now accept a trigger name suffix; the handler validates the named webhook trigger and seeds runs with `_start_from_node` so multi-trigger workflows dispatch from the requested node.
 - Manual run requests accept `start_from_node_id` and seed `_start_from_node` when the target trigger exists so multi-trigger workflows only dispatch the chosen entry instead of activating every trigger.
+- Manual run creation now validates trigger-node selection, rejects conflicting legacy trigger selectors, and stamps trigger metadata into `_trigger_context`.
 - Workflow schedule sync now recognizes Notion polling triggers, persisting their connection/database config and preserving cursor state between updates.
+- Workflow route test configs now include webhook ingress dedupe mode to keep Config stubs aligned.
+- Removed workflow-scoped webhook endpoints and token helpers now that inbound webhook traffic is handled through source-based ingress.
+- Trigger start validation helpers now allow large Response errors to keep run request signatures stable without clippy noise.

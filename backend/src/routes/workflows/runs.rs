@@ -40,7 +40,10 @@ pub struct StartWorkflowRunRequest {
     pub idempotency_key: Option<String>,
     pub context: Option<serde_json::Value>,
     pub priority: Option<i32>,
+    #[serde(alias = "startFromNodeId")]
     pub start_from_node_id: Option<String>,
+    #[serde(rename = "trigger_node_id", alias = "triggerNodeId")]
+    pub legacy_trigger_node_id: Option<String>,
 }
 
 pub(crate) fn redact_secrets(value: &mut serde_json::Value) {
@@ -86,27 +89,104 @@ pub(crate) fn redact_node_runs(mut node_runs: Vec<WorkflowNodeRun>) -> Vec<Workf
     node_runs
 }
 
-fn find_trigger_start(snapshot: &serde_json::Value, node_id: &str) -> Option<String> {
+struct TriggerStartMeta {
+    node_id: String,
+    trigger_type: String,
+}
+
+#[allow(clippy::result_large_err)]
+fn normalize_start_from_node_id(
+    start_from_node_id: Option<String>,
+    legacy_trigger_node_id: Option<String>,
+) -> Result<Option<String>, Response> {
+    match (start_from_node_id, legacy_trigger_node_id) {
+        (Some(_), Some(_)) => Err(JsonResponse::bad_request(
+            "Provide only start_from_node_id or trigger_node_id.",
+        )
+        .into_response()),
+        (Some(id), None) => Ok(Some(id)),
+        (None, Some(id)) => Ok(Some(id)),
+        (None, None) => Ok(None),
+    }
+}
+
+fn trigger_type_from_node(node: &serde_json::Value) -> String {
+    node.get("data")
+        .and_then(|value| value.get("triggerType"))
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_else(|| "manual".to_string())
+}
+
+#[allow(clippy::result_large_err)]
+fn validate_trigger_start(
+    snapshot: &serde_json::Value,
+    node_id: &str,
+) -> Result<TriggerStartMeta, Response> {
     let trimmed = node_id.trim();
     if trimmed.is_empty() {
-        return None;
+        return Err(JsonResponse::bad_request("start_from_node_id is invalid").into_response());
     }
-    let nodes = snapshot.get("nodes")?.as_array()?;
+    let nodes = snapshot
+        .get("nodes")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| {
+            JsonResponse::bad_request("start_from_node_id is invalid").into_response()
+        })?;
     for node in nodes {
-        let Some(id) = node.get("id").and_then(|v| v.as_str()) else {
+        let Some(id) = node.get("id").and_then(|value| value.as_str()) else {
             continue;
         };
         if id != trimmed {
             continue;
         }
-        let Some(kind) = node.get("type").and_then(|v| v.as_str()) else {
-            continue;
+        let Some(kind) = node.get("type").and_then(|value| value.as_str()) else {
+            return Err(JsonResponse::bad_request("start_from_node_id is invalid").into_response());
         };
-        if kind.eq_ignore_ascii_case("trigger") {
-            return Some(id.to_string());
+        if !kind.eq_ignore_ascii_case("trigger") {
+            return Err(JsonResponse::bad_request(
+                "start_from_node_id must reference a trigger node",
+            )
+            .into_response());
         }
+        return Ok(TriggerStartMeta {
+            node_id: id.to_string(),
+            trigger_type: trigger_type_from_node(node),
+        });
     }
-    None
+    Err(JsonResponse::bad_request("start_from_node_id is invalid").into_response())
+}
+
+fn merge_trigger_context(
+    existing: Option<serde_json::Value>,
+    meta: &TriggerStartMeta,
+    source: &str,
+) -> serde_json::Value {
+    let mut context = existing.unwrap_or_else(|| json!({}));
+    if let serde_json::Value::Object(ref mut map) = context {
+        map.insert(
+            "trigger_node_id".to_string(),
+            serde_json::Value::String(meta.node_id.clone()),
+        );
+        map.insert(
+            "trigger_type".to_string(),
+            serde_json::Value::String(meta.trigger_type.clone()),
+        );
+        map.insert(
+            "source".to_string(),
+            serde_json::Value::String(source.to_string()),
+        );
+    } else {
+        context = json!({
+            "trigger_node_id": meta.node_id,
+            "trigger_type": meta.trigger_type,
+            "source": source,
+            "payload": context,
+        });
+    }
+    context
 }
 
 pub async fn start_workflow_run(
@@ -239,21 +319,36 @@ pub async fn start_workflow_run(
         }
     }
 
-    let (idempotency_key_owned, trigger_ctx, priority, start_from_node_id) = match payload {
-        Some(Json(req)) => (
-            req.idempotency_key,
-            req.context,
-            req.priority,
-            req.start_from_node_id,
-        ),
-        None => (None, None, None, None),
-    };
+    let (idempotency_key_owned, trigger_ctx, priority, start_from_node_id, legacy_trigger_node_id) =
+        match payload {
+            Some(Json(req)) => (
+                req.idempotency_key,
+                req.context,
+                req.priority,
+                req.start_from_node_id,
+                req.legacy_trigger_node_id,
+            ),
+            None => (None, None, None, None, None),
+        };
     let idempotency_key = idempotency_key_owned.as_deref();
 
     // Clone raw workflow JSON
     let mut snapshot = wf.data.clone();
-
-    if let Some(ctx) = trigger_ctx {
+    let start_from_node_id =
+        match normalize_start_from_node_id(start_from_node_id, legacy_trigger_node_id) {
+            Ok(value) => value,
+            Err(resp) => return resp,
+        };
+    let mut trigger_context = trigger_ctx;
+    if let Some(start_id) = start_from_node_id.as_deref() {
+        let meta = match validate_trigger_start(&snapshot, start_id) {
+            Ok(value) => value,
+            Err(resp) => return resp,
+        };
+        snapshot["_start_from_node"] = serde_json::Value::String(meta.node_id.clone());
+        trigger_context = Some(merge_trigger_context(trigger_context, &meta, "manual"));
+    }
+    if let Some(ctx) = trigger_context {
         snapshot["_trigger_context"] = ctx;
     }
 
@@ -288,11 +383,6 @@ pub async fn start_workflow_run(
 
     let connection_metadata = workflow_connection_metadata::collect(&snapshot);
 
-    if let Some(start_id) = start_from_node_id.as_deref() {
-        if let Some(valid_start) = find_trigger_start(&snapshot, start_id) {
-            snapshot["_start_from_node"] = serde_json::Value::String(valid_start);
-        }
-    }
     workflow_connection_metadata::embed(&mut snapshot, &connection_metadata);
 
     match app_state
@@ -587,7 +677,10 @@ pub async fn cancel_all_runs_for_workflow(
 pub struct RerunRequest {
     pub idempotency_key: Option<String>,
     pub context: Option<serde_json::Value>,
+    #[serde(alias = "startFromNodeId")]
     pub start_from_node_id: Option<String>,
+    #[serde(rename = "trigger_node_id", alias = "triggerNodeId")]
+    pub legacy_trigger_node_id: Option<String>,
 }
 
 pub async fn rerun_workflow_run(
@@ -628,14 +721,30 @@ pub async fn rerun_workflow_run(
         }
     };
 
+    let RerunRequest {
+        idempotency_key,
+        context,
+        start_from_node_id,
+        legacy_trigger_node_id,
+    } = payload;
+    let start_from_node_id =
+        match normalize_start_from_node_id(start_from_node_id, legacy_trigger_node_id) {
+            Ok(value) => value,
+            Err(resp) => return resp,
+        };
+
     let mut snapshot = base_run.snapshot.clone();
-    if let Some(ctx) = payload.context {
-        snapshot["_trigger_context"] = ctx;
+    let mut trigger_context = context.or_else(|| snapshot.get("_trigger_context").cloned());
+    if let Some(start_id) = start_from_node_id.as_deref() {
+        let meta = match validate_trigger_start(&snapshot, start_id) {
+            Ok(value) => value,
+            Err(resp) => return resp,
+        };
+        snapshot["_start_from_node"] = serde_json::Value::String(meta.node_id.clone());
+        trigger_context = Some(merge_trigger_context(trigger_context, &meta, "manual"));
     }
-    if let Some(start_id) = payload.start_from_node_id {
-        if let Some(valid_start) = find_trigger_start(&snapshot, &start_id) {
-            snapshot["_start_from_node"] = serde_json::Value::String(valid_start);
-        }
+    if let Some(ctx) = trigger_context {
+        snapshot["_trigger_context"] = ctx;
     }
 
     if let Some(obj) = snapshot.as_object_mut() {
@@ -686,7 +795,7 @@ pub async fn rerun_workflow_run(
             workflow_id,
             workflow.workspace_id,
             snapshot,
-            payload.idempotency_key.as_deref(),
+            idempotency_key.as_deref(),
         )
         .await
     {
@@ -912,12 +1021,12 @@ mod tests {
                 webhook_secret: "0123456789abcdef0123456789ABCDEF".into(),
             },
             auth_cookie_secure: true,
-            webhook_secret: "0123456789abcdef0123456789ABCDEF".into(),
             jwt_issuer: "test-issuer".into(),
             jwt_audience: "test-audience".into(),
             workspace_member_limit: DEFAULT_WORKSPACE_MEMBER_LIMIT,
             workspace_monthly_run_limit: DEFAULT_WORKSPACE_MONTHLY_RUN_LIMIT,
             runaway_limit_5min: RUNAWAY_LIMIT_5MIN,
+            webhook_ingress_dedupe_mode: crate::config::WebhookIngressDedupeMode::Off,
         })
     }
 
@@ -958,9 +1067,6 @@ mod tests {
             }),
             concurrency_limit: 1,
             egress_allowlist: vec![],
-            require_hmac: false,
-            hmac_replay_window_sec: 300,
-            webhook_salt: Uuid::new_v4(),
             locked_by: None,
             locked_at: None,
             created_at: now,
@@ -1166,9 +1272,6 @@ mod tests {
             }),
             concurrency_limit: 1,
             egress_allowlist: vec![],
-            require_hmac: false,
-            hmac_replay_window_sec: 0,
-            webhook_salt: Uuid::new_v4(),
             locked_by: None,
             locked_at: None,
             created_at: OffsetDateTime::now_utc(),
@@ -1247,6 +1350,7 @@ mod tests {
                 context: None,
                 priority: None,
                 start_from_node_id: Some("schedule-1".to_string()),
+                legacy_trigger_node_id: None,
             })),
         )
         .await;
@@ -1260,6 +1364,161 @@ mod tests {
         assert_eq!(
             snapshot.get("_start_from_node").and_then(|v| v.as_str()),
             Some("schedule-1")
+        );
+        let trigger_context = snapshot
+            .get("_trigger_context")
+            .and_then(|v| v.as_object())
+            .expect("trigger context should be an object");
+        assert_eq!(
+            trigger_context
+                .get("trigger_node_id")
+                .and_then(|v| v.as_str()),
+            Some("schedule-1")
+        );
+        assert_eq!(
+            trigger_context.get("trigger_type").and_then(|v| v.as_str()),
+            Some("schedule")
+        );
+        assert_eq!(
+            trigger_context.get("source").and_then(|v| v.as_str()),
+            Some("manual")
+        );
+    }
+
+    #[tokio::test]
+    async fn start_workflow_run_rejects_unknown_start_from_node_id() {
+        let workspace_id = Uuid::new_v4();
+        let owner_id = Uuid::new_v4();
+        let workflow = Workflow {
+            id: Uuid::new_v4(),
+            user_id: owner_id,
+            workspace_id: Some(workspace_id),
+            name: "workflow".into(),
+            description: None,
+            data: json!({
+                "nodes": [
+                    {"id": "manual-1", "type": "trigger", "data": {"label": "Manual"}}
+                ],
+                "edges": []
+            }),
+            concurrency_limit: 1,
+            egress_allowlist: vec![],
+            locked_by: None,
+            locked_at: None,
+            created_at: OffsetDateTime::now_utc(),
+            updated_at: OffsetDateTime::now_utc(),
+        };
+        let workflow_for_find = workflow.clone();
+
+        let mut repo = MockWorkflowRepository::new();
+        repo.expect_count_workspace_runs_since()
+            .returning(|_, _| Box::pin(async { Ok(0) }));
+        repo.expect_find_workflow_for_member()
+            .returning(move |user, workflow_id| {
+                let wf = workflow_for_find.clone();
+                assert_eq!(user, wf.user_id);
+                assert_eq!(workflow_id, wf.id);
+                Box::pin(async move { Ok(Some(wf)) })
+            });
+        repo.expect_create_workflow_run().times(0);
+        repo.expect_record_run_event().times(0);
+
+        let workspace_repo: Arc<StaticWorkspaceMembershipRepository> =
+            Arc::new(StaticWorkspaceMembershipRepository::with_run_limit(5));
+        let state = test_state(
+            Arc::new(repo),
+            workspace_repo.clone() as Arc<dyn WorkspaceRepository>,
+        );
+
+        let response = start_workflow_run(
+            State(state),
+            AuthSession(claims_fixture(owner_id, "owner@example.com")),
+            Path(workflow.id),
+            Some(axum::Json(StartWorkflowRunRequest {
+                idempotency_key: None,
+                context: None,
+                priority: None,
+                start_from_node_id: Some("missing-node".to_string()),
+                legacy_trigger_node_id: None,
+            })),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            json["message"],
+            Value::String("start_from_node_id is invalid".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn start_workflow_run_rejects_non_trigger_start_from_node_id() {
+        let workspace_id = Uuid::new_v4();
+        let owner_id = Uuid::new_v4();
+        let workflow = Workflow {
+            id: Uuid::new_v4(),
+            user_id: owner_id,
+            workspace_id: Some(workspace_id),
+            name: "workflow".into(),
+            description: None,
+            data: json!({
+                "nodes": [
+                    {"id": "manual-1", "type": "trigger", "data": {"label": "Manual"}},
+                    {"id": "action-1", "type": "action", "data": {"label": "Action"}}
+                ],
+                "edges": []
+            }),
+            concurrency_limit: 1,
+            egress_allowlist: vec![],
+            locked_by: None,
+            locked_at: None,
+            created_at: OffsetDateTime::now_utc(),
+            updated_at: OffsetDateTime::now_utc(),
+        };
+        let workflow_for_find = workflow.clone();
+
+        let mut repo = MockWorkflowRepository::new();
+        repo.expect_count_workspace_runs_since()
+            .returning(|_, _| Box::pin(async { Ok(0) }));
+        repo.expect_find_workflow_for_member()
+            .returning(move |user, workflow_id| {
+                let wf = workflow_for_find.clone();
+                assert_eq!(user, wf.user_id);
+                assert_eq!(workflow_id, wf.id);
+                Box::pin(async move { Ok(Some(wf)) })
+            });
+        repo.expect_create_workflow_run().times(0);
+        repo.expect_record_run_event().times(0);
+
+        let workspace_repo: Arc<StaticWorkspaceMembershipRepository> =
+            Arc::new(StaticWorkspaceMembershipRepository::with_run_limit(5));
+        let state = test_state(
+            Arc::new(repo),
+            workspace_repo.clone() as Arc<dyn WorkspaceRepository>,
+        );
+
+        let response = start_workflow_run(
+            State(state),
+            AuthSession(claims_fixture(owner_id, "owner@example.com")),
+            Path(workflow.id),
+            Some(axum::Json(StartWorkflowRunRequest {
+                idempotency_key: None,
+                context: None,
+                priority: None,
+                start_from_node_id: Some("action-1".to_string()),
+                legacy_trigger_node_id: None,
+            })),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            json["message"],
+            Value::String("start_from_node_id must reference a trigger node".to_string())
         );
     }
 
@@ -1312,6 +1571,7 @@ mod tests {
                 idempotency_key: None,
                 context: None,
                 start_from_node_id: None,
+                legacy_trigger_node_id: None,
             }),
         )
         .await;

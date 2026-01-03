@@ -1,4 +1,4 @@
-use std::{collections::HashSet, env};
+use std::env;
 
 use crate::utils::encryption::{decode_key, EncryptionError};
 use thiserror::Error;
@@ -17,8 +17,6 @@ pub enum ConfigError {
         #[source]
         source: EncryptionError,
     },
-    #[error("{name} is too weak: {reason}")]
-    WeakSecret { name: &'static str, reason: String },
     #[error("invalid value for {name}: {reason}")]
     InvalidEnvVar { name: &'static str, reason: String },
 }
@@ -48,6 +46,13 @@ pub struct OAuthSettings {
     pub token_encryption_key: Vec<u8>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WebhookIngressDedupeMode {
+    Off,
+    LogOnly,
+    Enforce,
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub database_url: String,
@@ -58,12 +63,12 @@ pub struct Config {
     #[allow(dead_code)]
     pub stripe: StripeSettings,
     pub auth_cookie_secure: bool,
-    pub webhook_secret: String,
     pub jwt_issuer: String,
     pub jwt_audience: String,
     pub workspace_member_limit: i64,
     pub workspace_monthly_run_limit: i64,
     pub runaway_limit_5min: i64,
+    pub webhook_ingress_dedupe_mode: WebhookIngressDedupeMode,
 }
 
 impl Config {
@@ -168,9 +173,6 @@ impl Config {
             webhook_secret: require_env("STRIPE_WEBHOOK_SECRET")?,
         };
 
-        let webhook_secret = require_env("WEBHOOK_SECRET")?;
-        validate_webhook_secret(&webhook_secret)?;
-
         let auth_cookie_secure = env::var("AUTH_COOKIE_SECURE")
             .ok()
             .map(|value| match value.to_ascii_lowercase().as_str() {
@@ -189,6 +191,8 @@ impl Config {
             DEFAULT_WORKSPACE_MONTHLY_RUN_LIMIT,
         )?;
         let runaway_limit_5min = parse_positive_env_i64("RUNAWAY_LIMIT_5MIN", RUNAWAY_LIMIT_5MIN)?;
+        let webhook_ingress_dedupe_mode =
+            parse_webhook_ingress_dedupe_mode("WEBHOOK_INGRESS_DEDUPE_MODE")?;
 
         Ok(Config {
             database_url,
@@ -205,43 +209,14 @@ impl Config {
             api_secrets_encryption_key,
             stripe,
             auth_cookie_secure,
-            webhook_secret,
             jwt_issuer,
             jwt_audience,
             workspace_member_limit,
             workspace_monthly_run_limit,
             runaway_limit_5min,
+            webhook_ingress_dedupe_mode,
         })
     }
-}
-
-pub(crate) const MIN_WEBHOOK_SECRET_LENGTH: usize = 32;
-
-fn validate_webhook_secret(secret: &str) -> Result<(), ConfigError> {
-    if secret.len() < MIN_WEBHOOK_SECRET_LENGTH {
-        return Err(ConfigError::WeakSecret {
-            name: "WEBHOOK_SECRET",
-            reason: format!("must be at least {MIN_WEBHOOK_SECRET_LENGTH} characters long"),
-        });
-    }
-
-    let unique_chars = secret.chars().collect::<HashSet<_>>().len();
-    if unique_chars < 8 {
-        return Err(ConfigError::WeakSecret {
-            name: "WEBHOOK_SECRET",
-            reason: "must contain at least 8 unique characters".into(),
-        });
-    }
-
-    let lowered = secret.to_ascii_lowercase();
-    if lowered.contains("changeme") || lowered == "dev-secret" {
-        return Err(ConfigError::WeakSecret {
-            name: "WEBHOOK_SECRET",
-            reason: "placeholder values are not allowed".into(),
-        });
-    }
-
-    Ok(())
 }
 
 fn parse_positive_env_i64(name: &'static str, default: i64) -> Result<i64, ConfigError> {
@@ -269,6 +244,31 @@ fn parse_positive_env_i64(name: &'static str, default: i64) -> Result<i64, Confi
     }
 }
 
+fn parse_webhook_ingress_dedupe_mode(
+    name: &'static str,
+) -> Result<WebhookIngressDedupeMode, ConfigError> {
+    match env::var(name) {
+        Ok(raw) => {
+            let normalized = raw.trim().to_ascii_lowercase();
+            if normalized.is_empty() {
+                return Ok(WebhookIngressDedupeMode::Off);
+            }
+            match normalized.as_str() {
+                "off" | "false" | "0" => Ok(WebhookIngressDedupeMode::Off),
+                "log" | "log-only" | "log_only" | "logonly" => {
+                    Ok(WebhookIngressDedupeMode::LogOnly)
+                }
+                "enforce" | "on" | "true" | "1" => Ok(WebhookIngressDedupeMode::Enforce),
+                _ => Err(ConfigError::InvalidEnvVar {
+                    name,
+                    reason: "must be off, log-only, or enforce".to_string(),
+                }),
+            }
+        }
+        Err(_) => Ok(WebhookIngressDedupeMode::Off),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -280,7 +280,7 @@ mod tests {
     use std::sync::Mutex;
     use std::{panic, panic::UnwindSafe};
 
-    const REQUIRED_VARS: [&str; 25] = [
+    const REQUIRED_VARS: [&str; 24] = [
         "DATABASE_URL",
         "FRONTEND_ORIGIN",
         "GOOGLE_INTEGRATIONS_CLIENT_ID",
@@ -297,7 +297,6 @@ mod tests {
         "STRIPE_CLIENT_ID",
         "STRIPE_SECRET_KEY",
         "STRIPE_WEBHOOK_SECRET",
-        "WEBHOOK_SECRET",
         "JWT_ISSUER",
         "JWT_AUDIENCE",
         "ASANA_INTEGRATIONS_CLIENT_ID",
@@ -308,12 +307,13 @@ mod tests {
         "NOTION_INTEGRATIONS_REDIRECT_URI",
     ];
 
-    const OPTIONAL_VARS: [&str; 5] = [
+    const OPTIONAL_VARS: [&str; 6] = [
         "AUTH_COOKIE_SECURE",
         "WORKSPACE_MEMBER_LIMIT",
         "WORKSPACE_MONTHLY_RUN_LIMIT",
         "RUNAWAY_LIMIT_5MIN",
         "ADMIN_ORIGIN",
+        "WEBHOOK_INGRESS_DEDUPE_MODE",
     ]; // allow tests to run without ambient overrides
 
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
@@ -416,7 +416,6 @@ mod tests {
         env::set_var("STRIPE_CLIENT_ID", "stripe-client-id");
         env::set_var("STRIPE_SECRET_KEY", "stripe-secret");
         env::set_var("STRIPE_WEBHOOK_SECRET", "stripe-webhook");
-        env::set_var("WEBHOOK_SECRET", "0123456789abcdef0123456789ABCDEF");
         env::set_var("JWT_ISSUER", "dsentr.test");
         env::set_var("JWT_AUDIENCE", "dsentr.api");
         env::set_var(
@@ -537,33 +536,6 @@ mod tests {
                 }
                 Err(other) => panic!("expected decode error, got {other:?}"),
                 Ok(_) => panic!("expected decode error, got Ok"),
-            }
-        });
-    }
-
-    #[test]
-    fn rejects_weak_webhook_secret() {
-        with_env(|| {
-            populate_defaults();
-            env::set_var("WEBHOOK_SECRET", "short");
-            match Config::from_env() {
-                Err(ConfigError::WeakSecret { name, .. }) => {
-                    assert_eq!(name, "WEBHOOK_SECRET");
-                }
-                Err(other) => panic!("expected weak secret error, got {other:?}"),
-                Ok(_) => panic!("expected weak secret error, got Ok"),
-            }
-        });
-
-        with_env(|| {
-            populate_defaults();
-            env::set_var("WEBHOOK_SECRET", "changeme-change-me-change-me-change");
-            match Config::from_env() {
-                Err(ConfigError::WeakSecret { name, .. }) => {
-                    assert_eq!(name, "WEBHOOK_SECRET");
-                }
-                Err(other) => panic!("expected weak secret error, got {other:?}"),
-                Ok(_) => panic!("expected weak secret error, got Ok"),
             }
         });
     }

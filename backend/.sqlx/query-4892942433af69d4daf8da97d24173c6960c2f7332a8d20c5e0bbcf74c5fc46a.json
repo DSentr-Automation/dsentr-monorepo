@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            DELETE FROM webhook_ingress_dedupe AS dedupe\n            USING webhook_sources AS sources\n            WHERE dedupe.source_id = sources.id\n              AND dedupe.timestamp_floor < (\n                now() - make_interval(secs => GREATEST(sources.replay_window_sec, 86400))\n              )\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "4892942433af69d4daf8da97d24173c6960c2f7332a8d20c5e0bbcf74c5fc46a"
+}

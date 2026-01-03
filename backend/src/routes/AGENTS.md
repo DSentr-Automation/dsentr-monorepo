@@ -1,4 +1,4 @@
-# Routes Agent Notes
+﻿# Routes Agent Notes
 
 ## Purpose
 - HTTP handlers grouped by feature area. Each module exposes functions wired in `main.rs`.
@@ -11,14 +11,14 @@
 - `options/`: User settings APIs (secrets management).
 - `auth/`: Authentication/login flows, session management, password reset, etc.
 - `oauth/`: Connected account management and OAuth callbacks for Google/Microsoft integrations.
-- `workflows/`: Core workflow CRUD, execution controls, logs, SSE streams, webhooks.
+- `workflows/`: Core workflow CRUD, execution controls, logs, and SSE streams.
 - `workspaces.rs`: Workspace CRUD and membership APIs.
 
 ## Usage Tips
 - Handlers expect `AppState` and often an `AuthSession` extractor; ensure new routes reuse these patterns for authorization.
 - For APIs returning JSON, use `responses::JsonResponse` helpers to keep status/message structure consistent.
 - When adding new route groups, update `main.rs` to mount them and consider rate-limit layer alignment (`auth_governor_conf` vs global).
-- Workspace invitation emails must link to `/signup?invite=�?�` and use URL-encoded tokens�?"update the dedicated test if this contract changes.
+- Workspace invitation emails must link to `/signup?invite={token}` and use URL-encoded tokens; update the dedicated test if this contract changes.
 - Workspace lifecycle flows now expose `GET /api/workspaces`, `GET /api/invites`, `POST /api/workspaces/:id/leave`, and `POST /api/workspaces/:id/revoke`. Use the shared Solo-provisioning helper so the last member receives an automatic personal workspace when they leave or are revoked.
 - Settings secrets APIs now decrypt/encrypt user secret stores with `API_SECRETS_ENCRYPTION_KEY` and opportunistically re-encrypt legacy plaintext values so API keys are not persisted in cleartext.
 
@@ -50,14 +50,14 @@
 - Workspace OAuth route fixtures now handle nullable `user_oauth_token_id` values so shared connections stay listable after personal token deletion.
 - Shared the `PlanTier` enum from models and updated workspaces/auth/stripe route tests to rely on the repository-level `get_plan` helper so backend plan gating no longer depends on route-local definitions.
 - Workspace OAuth routes serialize and authorize against the new `owner_user_id`/`user_oauth_token_id` fields so multiple shared connections per provider can coexist without clobbering each other in the repository mocks.
-- Workspace OAuth routes now resolve shared credentials by explicit connection IDs: Microsoft Teams APIs require a connection_id + scope, and handlers double-check the resolved workspace before issuing tokens so selecting a stale ID can’t leak another workspace’s credentials. Test repositories were updated to track multiple connections for these scenarios.
+- Workspace OAuth routes now resolve shared credentials by explicit connection IDs: Microsoft Teams APIs require a connection_id + scope, and handlers double-check the resolved workspace before issuing tokens so selecting a stale ID can't leak another workspace's credentials. Test repositories were updated to track multiple connections for these scenarios.
 - Added workspace/member/run quota enforcement with explicit error codes (`workspace_plan_required`, `workspace_member_limit`, `workspace_run_limit`) plus a shared helper module so invites, signup, and workflow run routes all emit consistent JSON payloads.
 - Added regression tests that cover invite acceptance at the member cap plus workflow run starts at the run cap, ensuring the proper status codes, error payloads, and quota release behavior when idempotent requests reuse existing runs.
 - Workspaces/auth/account/billing routes now sync or clear `workspace_billing_cycles` based on Stripe subscription data, expose `cycle_started_at` alongside `renews_at`, and wipe stored cycle windows whenever a workspace downgrades back to Solo so quota evaluation matches the real billing window.
 - Route mocks now implement the expanded workspace repository surface (member counts, run quotas, billing cycles) and default missing plans to Workspace so invite/signup paths hit plan-limit guards without panicking in tests.
 - Workspace member caps reserve seats for pending invitations and read limits from `WORKSPACE_MEMBER_LIMIT`/`WORKSPACE_MONTHLY_RUN_LIMIT` so deployments can tune quotas without code changes.
 - Microsoft Teams channel member lookup now allows workspace-plan members/owners to use personal OAuth connections while still enforcing workspace access.
-- Stripe checkout completion now records workspace name changes into workflow change history so Settings �+' Logs can show who renamed the workspace.
+- Stripe checkout completion now records workspace name changes into workflow change history so Settings > Logs can show who renamed the workspace.
 
 - Workflow routes now enforce optimistic concurrency on workspace saves and provide `/api/workflows/{id}/events` SSE so collaborators receive live workflow updates without refreshing.
 
@@ -74,7 +74,7 @@
 - Stripe webhooks now record processed event ids inside a transaction-backed log so duplicate deliveries short-circuit without reapplying billing mutations; tests cover repeated checkout and subscription events.
 
 ### New endpoint: resume subscription
-- `POST /api/workspaces/billing/subscription/resume` clears `cancel_at_period_end` on the active Stripe subscription for the authenticated user�?Ts Stripe customer. Returns the updated renewal date so clients can refresh UI.
+- `POST /api/workspaces/billing/subscription/resume` clears `cancel_at_period_end` on the active Stripe subscription for the authenticated user's Stripe customer. Returns the updated renewal date so clients can refresh UI.
 - Workspace membership removal/leave flows now call the workspace OAuth purge helper and have regression tests to ensure shared connections are deleted when members depart or workspaces convert to Solo.
 - Added `POST /api/issues` so authenticated users can submit issue reports that persist user/workspace context for support investigations.
 - Added an admin-only `/api/admin` router (session + role guarded with an IP allowlist stub) that surfaces read-only listings and admin issue replies without exposing OAuth secrets.
@@ -92,3 +92,13 @@
 - Slack channel listing now requests IM/MPIM types and surfaces missing-scope errors with reconnect guidance instead of opaque Slack failures.
 - Google Sheets routes now accept personal OAuth scope with explicit `connection_id` so personal connections can fetch tokens and worksheets without affecting workspace handling.
 - Added a Debug derive for the Google Sheets token proxy so personal-scope route tests can call `expect_err` without compile failures.
+- Added public webhook ingress routing at `POST /api/webhooks/:source_id`, validating `X-DSentr-Timestamp`/`X-DSentr-Signature` via `webhook_ingress_validation`, matching subscriptions by `event_type`, and returning `202 Accepted` after validation while runs enqueue asynchronously.
+- Webhook ingress now stamps trigger metadata (`trigger_node_id`, `trigger_type`, `source`) into `_trigger_context` when enqueuing runs so trigger selection stays explicit.
+- Added authenticated workspace-scoped webhook source/subscription management APIs under `/api/workspaces/:workspace_id/webhooks/...` so the UI can manage control-plane configuration; these routes never expose webhook secrets and do not alter ingress or execution behavior.
+- Webhook ingress now records dedupe keys with log-only/enforce modes plus dedicated logs/metrics for dedupe outcomes and enqueue counts.
+- Removed legacy workflow-scoped webhook URL/config/trigger endpoints so `/api/webhooks/:source_id` is the only inbound webhook path.
+- Added source-scoped webhook subscription list/create/delete APIs with trigger/event validation and subscription management tests.
+- Webhook ingress now fans out one run per matching subscription, emits fanout counters, logs per-subscription outcomes, and adds handler tests for zero/multiple/partial failure cases.
+- Webhook ingress now records delivery log entries (received/routed/dropped/errored) after authentication and keeps logging failures non-blocking so operators can observe inbound webhook activity.
+- Webhook ingress metrics now include explicit counters for matched subscriptions and run enqueue outcomes, plus test coverage uses a delivery repo in replay rejection cases.
+- Webhook route helpers now allow targeted clippy warnings for large Response errors/argument lists and avoid needless tracing borrows to keep ingress signatures stable.

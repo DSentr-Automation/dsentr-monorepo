@@ -769,8 +769,6 @@ export default function FlowCanvas({
         switch (lowered) {
           case 'send email':
             return 'email'
-          case 'post webhook':
-            return 'webhook'
           case 'create google sheet row':
             return 'sheets'
           case 'http request':
@@ -1344,7 +1342,6 @@ export default function FlowCanvas({
       'actionEmailMailgun',
       'actionEmailAmazonSes',
       'actionEmailSmtp',
-      'actionWebhook',
       'actionSlack',
       'actionTeams',
       'actionGoogleChat',
@@ -1927,6 +1924,10 @@ function FlyoutTriggerFields({ nodeId, isSoloPlan }: FlyoutTriggerFieldsProps) {
   const isNotionTrigger =
     normalizedTriggerType === 'notion.new_database_row' ||
     normalizedTriggerType === 'notion.updated_database_row'
+  const isWebhookTrigger = normalizedTriggerType === 'webhook'
+  const webhookEventType =
+    typeof nodeData?.event_type === 'string' ? nodeData.event_type : ''
+  const webhookEventTypeMissing = isWebhookTrigger && !webhookEventType.trim()
   const [confirmingDelete, setConfirmingDelete] = useState(false)
 
   const handleLabelChange = useCallback(
@@ -1942,9 +1943,24 @@ function FlyoutTriggerFields({ nodeId, isSoloPlan }: FlyoutTriggerFieldsProps) {
     useWorkflowStore.getState().removeNode(nodeId)
   }, [nodeId])
   const handleTriggerTypeChange = useCallback(
-    (value: string) =>
-      updateNodeData(nodeId, { triggerType: value, dirty: true }),
-    [nodeId, updateNodeData]
+    (value: string) => {
+      const normalized = value.trim().toLowerCase()
+      if (normalized === 'webhook') {
+        updateNodeData(nodeId, {
+          triggerType: value,
+          event_type:
+            typeof nodeData?.event_type === 'string' ? nodeData.event_type : '',
+          dirty: true
+        })
+        return
+      }
+      updateNodeData(nodeId, {
+        triggerType: value,
+        event_type: undefined,
+        dirty: true
+      })
+    },
+    [nodeId, nodeData?.event_type, updateNodeData]
   )
 
   const inputs = Array.isArray(nodeData?.inputs) ? nodeData.inputs : []
@@ -2504,7 +2520,7 @@ function FlyoutTriggerFields({ nodeId, isSoloPlan }: FlyoutTriggerFieldsProps) {
           nodeId={nodeId}
           label={(nodeData?.label as string) || 'Trigger'}
           dirty={Boolean(nodeData?.dirty)}
-          hasValidationErrors={Boolean(labelError)}
+          hasValidationErrors={Boolean(labelError) || webhookEventTypeMissing}
           expanded={true}
           onLabelChange={handleLabelChange}
           onExpanded={() => undefined}
@@ -2540,6 +2556,28 @@ function FlyoutTriggerFields({ nodeId, isSoloPlan }: FlyoutTriggerFieldsProps) {
             />
           </div>
         </div>
+
+        {isWebhookTrigger ? (
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+              Event type
+            </label>
+            <div className="mt-2 space-y-2">
+              <NodeInputField
+                placeholder="order.created"
+                value={webhookEventType}
+                onChange={(value) =>
+                  updateNodeData(nodeId, { event_type: value, dirty: true })
+                }
+              />
+              {webhookEventTypeMissing ? (
+                <p className="text-xs text-red-500">
+                  Event type is required for webhook triggers.
+                </p>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
 
         {isNotionTrigger ? (
           <div className="rounded-lg bg-zinc-50 p-4 dark:bg-zinc-800/40">

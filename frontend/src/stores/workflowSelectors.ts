@@ -35,21 +35,6 @@ export interface HttpRequestActionParams extends Record<string, unknown> {
   dirty: boolean
 }
 
-export interface WebhookActionParams extends Record<string, unknown> {
-  url: string
-  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
-  headers: KeyValuePair[]
-  queryParams: KeyValuePair[]
-  bodyType: 'raw' | 'json' | 'form'
-  body: string
-  formBody: KeyValuePair[]
-  authType: 'none' | 'basic' | 'bearer'
-  authUsername: string
-  authPassword: string
-  authToken: string
-  dirty: boolean
-}
-
 export interface RunCustomCodeActionParams extends Record<string, unknown> {
   code: string
   inputs: KeyValuePair[]
@@ -70,7 +55,6 @@ export interface SheetsActionParams extends Record<string, unknown> {
 
 export type NormalizedActionParams =
   | HttpRequestActionParams
-  | WebhookActionParams
   | RunCustomCodeActionParams
   | SheetsActionParams
   | (Record<string, unknown> & { dirty: boolean })
@@ -160,7 +144,6 @@ const HTTP_METHODS = new Set([
   'HEAD',
   'OPTIONS'
 ])
-const WEBHOOK_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
 const BODY_TYPES = new Set(['raw', 'json', 'form'])
 const HTTP_AUTH_TYPES = new Set(['none', 'basic', 'bearer'])
 const DEFAULT_KEY_VALUE: KeyValuePair = Object.freeze({ key: '', value: '' })
@@ -211,8 +194,6 @@ export function normalizeActionType(value: unknown): string {
   switch (lowered) {
     case 'send email':
       return 'email'
-    case 'post webhook':
-      return 'webhook'
     case 'create google sheet row':
       return 'sheets'
     case 'http request':
@@ -362,39 +343,6 @@ function normalizeHttpParams(
   return withDirty(normalized, meta.dirty)
 }
 
-function normalizeWebhookParams(
-  data: ActionNodeDataLike,
-  meta: ActionMeta
-): WebhookActionParams {
-  const params = extractParams(data)
-  const methodRaw = toString(params.method).toUpperCase()
-  const method = WEBHOOK_METHODS.has(methodRaw) ? methodRaw : 'POST'
-  const bodyTypeRaw = toString(params.bodyType).toLowerCase()
-  const bodyType = BODY_TYPES.has(bodyTypeRaw)
-    ? (bodyTypeRaw as 'raw' | 'json' | 'form')
-    : 'raw'
-  const authTypeRaw = toString(params.authType).toLowerCase()
-  const authType = HTTP_AUTH_TYPES.has(authTypeRaw)
-    ? (authTypeRaw as 'none' | 'basic' | 'bearer')
-    : 'none'
-
-  const normalized = {
-    url: toString(params.url),
-    method: method as WebhookActionParams['method'],
-    headers: normalizeKeyValuePairs(params.headers),
-    queryParams: normalizeKeyValuePairs(params.queryParams),
-    bodyType,
-    body: toString(params.body),
-    formBody: normalizeKeyValuePairs(params.formBody),
-    authType,
-    authUsername: toString(params.authUsername),
-    authPassword: toString(params.authPassword),
-    authToken: toString(params.authToken)
-  }
-
-  return withDirty(normalized, meta.dirty)
-}
-
 function normalizeRunCustomCodeParams(
   data: ActionNodeDataLike,
   meta: ActionMeta
@@ -439,10 +387,6 @@ const DEFAULT_HTTP_PARAMS: HttpRequestActionParams = normalizeHttpParams(
   EMPTY_DATA,
   FALLBACK_ACTION_META
 )
-const DEFAULT_WEBHOOK_PARAMS: WebhookActionParams = normalizeWebhookParams(
-  EMPTY_DATA,
-  FALLBACK_ACTION_META
-)
 const DEFAULT_CODE_PARAMS: RunCustomCodeActionParams =
   normalizeRunCustomCodeParams(EMPTY_DATA, FALLBACK_ACTION_META)
 const DEFAULT_SHEETS_PARAMS: SheetsActionParams = normalizeSheetsParams(
@@ -456,8 +400,6 @@ function getDefaultParamsForType(type: string): NormalizedActionParams {
   switch (type) {
     case 'http':
       return DEFAULT_HTTP_PARAMS
-    case 'webhook':
-      return DEFAULT_WEBHOOK_PARAMS
     case 'code':
       return DEFAULT_CODE_PARAMS
     case 'sheets':
@@ -487,8 +429,6 @@ function computeParams(
   switch (type) {
     case 'http':
       return normalizeHttpParams(data, meta)
-    case 'webhook':
-      return normalizeWebhookParams(data, meta)
     case 'code':
       return normalizeRunCustomCodeParams(data, meta)
     case 'sheets':

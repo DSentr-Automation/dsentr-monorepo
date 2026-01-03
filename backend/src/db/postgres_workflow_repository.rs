@@ -34,7 +34,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
             r#"
             INSERT INTO workflows (user_id, workspace_id, name, description, data, created_at, updated_at)
             VALUES ($1, $2, $3, $4, $5, now(), now())
-            RETURNING id, user_id, workspace_id, name, description, data, concurrency_limit, egress_allowlist, require_hmac, hmac_replay_window_sec, webhook_salt, locked_by, locked_at, created_at, updated_at
+            RETURNING id, user_id, workspace_id, name, description, data, concurrency_limit, egress_allowlist, locked_by, locked_at, created_at, updated_at
             "#
         )
         .bind(user_id)
@@ -59,9 +59,6 @@ impl WorkflowRepository for PostgresWorkflowRepository {
                    data,
                    concurrency_limit,
                    egress_allowlist,
-                   require_hmac,
-                   hmac_replay_window_sec,
-                   webhook_salt,
                    locked_by,
                    locked_at,
                    created_at,
@@ -93,9 +90,6 @@ impl WorkflowRepository for PostgresWorkflowRepository {
                    data,
                    concurrency_limit,
                    egress_allowlist,
-                   require_hmac,
-                   hmac_replay_window_sec,
-                   webhook_salt,
                    locked_by,
                    locked_at,
                    created_at,
@@ -126,9 +120,6 @@ impl WorkflowRepository for PostgresWorkflowRepository {
                    data,
                    concurrency_limit,
                    egress_allowlist,
-                   require_hmac,
-                   hmac_replay_window_sec,
-                   webhook_salt,
                    locked_by,
                    locked_at,
                    created_at,
@@ -162,7 +153,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
                     data = $5,
                     updated_at = now()
                 WHERE user_id = $1 AND id = $2 AND updated_at = $6
-                RETURNING id, user_id, workspace_id, name, description, data, concurrency_limit, egress_allowlist, require_hmac, hmac_replay_window_sec, webhook_salt, locked_by, locked_at, created_at, updated_at
+                RETURNING id, user_id, workspace_id, name, description, data, concurrency_limit, egress_allowlist, locked_by, locked_at, created_at, updated_at
                 "#
             )
             .bind(user_id)
@@ -182,7 +173,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
                     data = $5,
                     updated_at = now()
                 WHERE user_id = $1 AND id = $2
-                RETURNING id, user_id, workspace_id, name, description, data, concurrency_limit, egress_allowlist, require_hmac, hmac_replay_window_sec, webhook_salt, locked_by, locked_at, created_at, updated_at
+                RETURNING id, user_id, workspace_id, name, description, data, concurrency_limit, egress_allowlist, locked_by, locked_at, created_at, updated_at
                 "#
             )
             .bind(user_id)
@@ -215,9 +206,6 @@ impl WorkflowRepository for PostgresWorkflowRepository {
                    data,
                    concurrency_limit,
                    egress_allowlist,
-                   require_hmac,
-                   hmac_replay_window_sec,
-                   webhook_salt,
                    locked_by,
                    locked_at,
                    created_at,
@@ -249,9 +237,6 @@ impl WorkflowRepository for PostgresWorkflowRepository {
                    data,
                    concurrency_limit,
                    egress_allowlist,
-                   require_hmac,
-                   hmac_replay_window_sec,
-                   webhook_salt,
                    locked_by,
                    locked_at,
                    created_at,
@@ -307,7 +292,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
             SET workspace_id = $3,
                 updated_at = now()
             WHERE user_id = $1 AND id = $2
-            RETURNING id, user_id, workspace_id, name, description, data, concurrency_limit, egress_allowlist, require_hmac, hmac_replay_window_sec, webhook_salt, locked_by, locked_at, created_at, updated_at
+            RETURNING id, user_id, workspace_id, name, description, data, concurrency_limit, egress_allowlist, locked_by, locked_at, created_at, updated_at
             "#
         )
         .bind(user_id)
@@ -331,7 +316,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
                 locked_at = CASE WHEN $2 IS NULL THEN NULL ELSE now() END,
                 updated_at = now()
             WHERE id = $1
-            RETURNING id, user_id, workspace_id, name, description, data, concurrency_limit, egress_allowlist, require_hmac, hmac_replay_window_sec, webhook_salt, locked_by, locked_at, created_at, updated_at
+            RETURNING id, user_id, workspace_id, name, description, data, concurrency_limit, egress_allowlist, locked_by, locked_at, created_at, updated_at
             "#,
         )
         .bind(workflow_id)
@@ -423,26 +408,6 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected())
-    }
-
-    async fn rotate_webhook_salt(
-        &self,
-        user_id: Uuid,
-        workflow_id: Uuid,
-    ) -> Result<Option<Uuid>, sqlx::Error> {
-        let row = sqlx::query!(
-            r#"
-            UPDATE workflows
-            SET webhook_salt = gen_random_uuid(), updated_at = now()
-            WHERE user_id = $1 AND id = $2
-            RETURNING webhook_salt
-            "#,
-            user_id,
-            workflow_id
-        )
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(row.map(|r| r.webhook_salt))
     }
 
     async fn create_workflow_run(
@@ -1363,61 +1328,6 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
-    }
-
-    async fn update_webhook_config(
-        &self,
-        user_id: Uuid,
-        workflow_id: Uuid,
-        require_hmac: bool,
-        replay_window_sec: i32,
-    ) -> Result<bool, sqlx::Error> {
-        let res = sqlx::query(
-            r#"
-            UPDATE workflows
-            SET require_hmac = $3, hmac_replay_window_sec = $4, updated_at = now()
-            WHERE user_id = $1 AND id = $2
-            "#,
-        )
-        .bind(user_id)
-        .bind(workflow_id)
-        .bind(require_hmac)
-        .bind(replay_window_sec)
-        .execute(&self.pool)
-        .await?;
-        Ok(res.rows_affected() > 0)
-    }
-
-    async fn try_record_webhook_signature(
-        &self,
-        workflow_id: Uuid,
-        signature: &str,
-    ) -> Result<bool, sqlx::Error> {
-        let res = sqlx::query(
-            r#"
-            INSERT INTO webhook_replays (workflow_id, signature, created_at)
-            VALUES ($1, $2, now())
-            ON CONFLICT (workflow_id, signature) DO NOTHING
-            "#,
-        )
-        .bind(workflow_id)
-        .bind(signature)
-        .execute(&self.pool)
-        .await?;
-        Ok(res.rows_affected() > 0)
-    }
-
-    async fn purge_old_webhook_replays(&self, older_than_seconds: i64) -> Result<u64, sqlx::Error> {
-        let res = sqlx::query(
-            r#"
-            DELETE FROM webhook_replays
-            WHERE created_at < now() - ($1::bigint * INTERVAL '1 second')
-            "#,
-        )
-        .bind(older_than_seconds)
-        .execute(&self.pool)
-        .await?;
-        Ok(res.rows_affected())
     }
 
     async fn insert_egress_block_event(

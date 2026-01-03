@@ -26,7 +26,7 @@ itly coordinated.
 - Added pluggable app email delivery with environment-controlled provider selection (`EMAIL_PROVIDER`). Supports `smtp` and `sendgrid` for signup, password reset, invites, and account notifications. This accommodates hosts that disallow outbound SMTP while preserving SMTP for environments that support it.
 - Workflow node email behavior is unchanged: nodes using SMTP still send via runtime SMTP configuration and are not affected by the app-level provider switch.
 
-- Webhooks HMAC plan gating: The `/api/workflows/:id/webhook/config` POST now enforces that HMAC can only be enabled on workspace plans. Attempts to enable HMAC from Solo plan contexts receive `403 Forbidden` with a clear message. This matches frontend gating in Settings → Webhooks and prevents paid features on free plans.
+- Removed legacy workflow-scoped webhook routes/config/token handling and dropped the `WEBHOOK_SECRET` requirement so source-scoped `/api/webhooks/:source_id` ingress is the only inbound webhook path.
 
 - Privacy preference and signup settings:
   - Added `/api/account/privacy` (GET/PUT) to read/update `users.settings.privacy.share_workflows_for_improvement`.

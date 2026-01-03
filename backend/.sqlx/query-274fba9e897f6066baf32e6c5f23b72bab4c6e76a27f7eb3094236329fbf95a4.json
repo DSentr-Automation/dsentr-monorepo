@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            DELETE FROM webhook_sources\n            WHERE workspace_id = $1\n              AND id = $2\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "274fba9e897f6066baf32e6c5f23b72bab4c6e76a27f7eb3094236329fbf95a4"
+}

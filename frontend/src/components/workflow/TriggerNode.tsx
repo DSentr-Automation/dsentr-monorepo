@@ -78,6 +78,7 @@ export type TriggerNodeData = {
   inputs?: TriggerInput[]
   dirty?: boolean
   triggerType?: string
+  event_type?: string
   scheduleConfig?: ScheduleConfig
   labelError?: string | null
   wfEpoch?: number
@@ -208,6 +209,10 @@ function TriggerNodeContent({
     () => triggerType.trim().toLowerCase() || 'manual',
     [triggerType]
   )
+  const webhookEventType =
+    typeof nodeData?.event_type === 'string' ? nodeData.event_type : ''
+  const webhookEventTypeMissing =
+    normalizedTriggerType === 'webhook' && !webhookEventType.trim()
 
   const scheduleConfig = useMemo(
     () => normalizeScheduleConfig(nodeData?.scheduleConfig, defaultTimezone),
@@ -260,6 +265,7 @@ function TriggerNodeContent({
   const combinedHasValidationErrors =
     hasDuplicateKeys ||
     hasInvalidInputs ||
+    webhookEventTypeMissing ||
     Boolean(labelError) ||
     scheduleRestricted ||
     notionRestricted

@@ -59,12 +59,6 @@ pub trait WorkflowRepository: Send + Sync {
         workflow_id: Uuid,
     ) -> Result<Option<Workflow>, sqlx::Error>;
 
-    async fn rotate_webhook_salt(
-        &self,
-        user_id: Uuid,
-        workflow_id: Uuid,
-    ) -> Result<Option<Uuid>, sqlx::Error>;
-
     async fn update_workflow(
         &self,
         user_id: Uuid,
@@ -348,23 +342,6 @@ pub trait WorkflowRepository: Send + Sync {
         workflow_id: Uuid,
         allowlist: &[String],
     ) -> Result<bool, sqlx::Error>;
-
-    async fn update_webhook_config(
-        &self,
-        user_id: Uuid,
-        workflow_id: Uuid,
-        require_hmac: bool,
-        replay_window_sec: i32,
-    ) -> Result<bool, sqlx::Error>;
-
-    async fn try_record_webhook_signature(
-        &self,
-        workflow_id: Uuid,
-        signature: &str,
-    ) -> Result<bool, sqlx::Error>;
-
-    #[allow(dead_code)]
-    async fn purge_old_webhook_replays(&self, older_than_seconds: i64) -> Result<u64, sqlx::Error>;
 
     // Egress block events
     async fn insert_egress_block_event(

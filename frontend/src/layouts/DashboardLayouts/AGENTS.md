@@ -20,6 +20,8 @@
 - Asana canvas nodes now pass the normalized plan tier into the node controller so the solo-only upgrade banner no longer appears for workspace plans when viewing the node on the canvas.
 - Added Notion action palette entry plus trigger flyout controls (connection + database pickers) so Notion workflows can be configured alongside existing triggers and actions.
 - Notion trigger fetch hooks drop the static `errorMessage` dependency to satisfy hooks lint while keeping error mapping intact.
+- Webhook trigger flyout now initializes and requires an event_type value, and workflow saves are blocked when webhook triggers are missing it.
+- Removed legacy webhook action normalization/aliases from the canvas so obsolete webhook action nodes are no longer recognized in the editor.
 
 ## Notes
 - Pickers are locally stateful and wrapped in useMemo/useCallback with click-outside + Escape handling to avoid React Flow re-render loops.

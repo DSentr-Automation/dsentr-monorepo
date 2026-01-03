@@ -174,13 +174,6 @@ const buildSummaryItems = (
       addItem('URL', url)
       break
     }
-    case 'webhook': {
-      const url = normalizeSummaryText(params.url)
-      if (!url) break
-      addItem('Method', normalizeSummaryText(params.method, 12).toUpperCase())
-      addItem('URL', url)
-      break
-    }
     case 'sheets': {
       addItem('Spreadsheet', normalizeSummaryText(params.spreadsheetId))
       addItem('Worksheet', normalizeSummaryText(params.worksheet))

@@ -127,12 +127,12 @@ mod tests {
                 webhook_secret: "0123456789abcdef0123456789ABCDEF".into(),
             },
             auth_cookie_secure: secure_cookie,
-            webhook_secret: "0123456789abcdef0123456789ABCDEF".into(),
             jwt_issuer: "test-issuer".into(),
             jwt_audience: "test-audience".into(),
             workspace_member_limit: DEFAULT_WORKSPACE_MEMBER_LIMIT,
             workspace_monthly_run_limit: DEFAULT_WORKSPACE_MONTHLY_RUN_LIMIT,
             runaway_limit_5min: RUNAWAY_LIMIT_5MIN,
+            webhook_ingress_dedupe_mode: crate::config::WebhookIngressDedupeMode::Off,
         });
 
         AppState {

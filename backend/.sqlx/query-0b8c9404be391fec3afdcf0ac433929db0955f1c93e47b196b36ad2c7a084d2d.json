@@ -1,0 +1,67 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO webhook_subscriptions (\n                webhook_source_id,\n                workflow_id,\n                trigger_node_id,\n                event_type\n            )\n            VALUES ($1, $2, $3, $4)\n            RETURNING id,\n                      webhook_source_id,\n                      workflow_id,\n                      trigger_node_id,\n                      event_type,\n                      enabled,\n                      created_at,\n                      updated_at\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "webhook_source_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "workflow_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "trigger_node_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "event_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "enabled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "0b8c9404be391fec3afdcf0ac433929db0955f1c93e47b196b36ad2c7a084d2d"
+}

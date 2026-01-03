@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE webhook_sources\n            SET require_hmac = false,\n                updated_at = now()\n            WHERE workspace_id = $1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8ffb0fd1a7f3bd0351e32b3ac602a986b2769885f33b74ddd9578965fa260e1f"
+}

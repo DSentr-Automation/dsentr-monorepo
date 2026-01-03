@@ -7,7 +7,7 @@
 ## Layout
 - `1 - init.sql`: bootstraps the database (enables `pgcrypto`, creates `dsentr`, and defines the earliest user/auth tables). Run manually when standing up a new environment.
 - `2025_05_*`: early access and authentication flow tables (email verification, password reset, signup metadata, user roles/enums).
-- `2025_09_*` & `2025_10_*`: workflow engine schema (workflows, runs, node runs, schedules, dead letters, webhook replays, egress block events) plus concurrency/security columns and helper triggers.
+- `2025_09_*` & `2025_10_*`: workflow engine schema (workflows, runs, node runs, schedules, dead letters, egress block events) plus concurrency/security columns and helper triggers.
 - `2025_10_14_*` to `2025_10_17_*`: workspace and organization lifecycle (memberships, invites, deprecating legacy workspace-team linkage).
 - `2025_10_11_1_create_user_oauth_tokens.sql`: persistence for connected OAuth integrations.
 - `2025_05_23_add_oauth_type_to_users.sql` & `2025_9_16_add_oauth_enum_email.sql`: align user auth tables with OAuth providers.
@@ -53,3 +53,8 @@
 - Enforced Slack workspace connection team-id requirements with non-null/length checks and a per-workspace uniqueness index on `(workspace_id, slack_team_id)`.
 - Moving back commit indices
 - Added the Notion OAuth provider value to the `oauth_connection_provider` enum so Notion connections can be persisted.
+- Added `webhook_sources` table with workspace scoping, defaults, and updated_at trigger for webhook source persistence.
+- Added `webhook_subscriptions` table to map webhook sources and event types to workflow trigger nodes.
+- Added `webhook_ingress_dedupe` table with indexes so inbound webhook deliveries can be deduplicated and retained for cleanup.
+- Updated migration overview to drop legacy workflow webhook replay references now that ingress is source-based.
+- Added `webhook_deliveries` table with source/subscription/received-at indexes to track inbound webhook delivery attempts.

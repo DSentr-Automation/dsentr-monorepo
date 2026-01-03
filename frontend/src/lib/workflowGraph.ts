@@ -9,7 +9,7 @@ export type FlowNode = {
   [key: string]: any
 }
 
-export function sanitizeData(data: any) {
+export function sanitizeData(data: any, nodeType?: string) {
   if (!data || typeof data !== 'object') return data
   const {
     dirty,
@@ -19,6 +19,34 @@ export function sanitizeData(data: any) {
     labelError,
     ...rest
   } = data as any
+  const normalizedTriggerType =
+    typeof rest.triggerType === 'string'
+      ? rest.triggerType.trim().toLowerCase()
+      : ''
+  const isTriggerNode = nodeType === 'trigger' || normalizedTriggerType !== ''
+
+  if (isTriggerNode) {
+    const {
+      webhook_source_id,
+      webhookSourceId,
+      source_id,
+      sourceId,
+      webhookSource,
+      ...triggerRest
+    } = rest as any
+    if (normalizedTriggerType === 'webhook') {
+      return {
+        ...triggerRest,
+        event_type:
+          typeof triggerRest.event_type === 'string'
+            ? triggerRest.event_type
+            : ''
+      }
+    }
+    const { event_type, ...nonWebhookRest } = triggerRest as any
+    return nonWebhookRest
+  }
+
   return rest
 }
 
@@ -27,7 +55,7 @@ export function normalizeNode(n: any) {
     id: n.id,
     type: n.type,
     position: n.position,
-    data: sanitizeData(n.data)
+    data: sanitizeData(n.data, n.type)
   }
 }
 

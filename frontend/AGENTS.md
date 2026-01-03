@@ -245,7 +245,10 @@ Content Security Policy hardening:
 
 - Webhook regenerate modal visibility: the confirm modal in `src/components/settings/tabs/WebhooksTab.tsx` is now rendered with a fixed, viewport-level overlay (`fixed inset-0 z-50`) instead of being absolutely positioned inside the tab content. This ensures the modal appears centered and visible without scrolling on tall settings pages, particularly for workspace plans with longer content.
 
-- Webhooks tab now surfaces per-trigger endpoints (base webhook URL plus the trigger node name), refreshes them when tokens/keys rotate, and updates examples to copy the selected trigger URL.
+- Webhooks tab now aligns ingress copy and examples to source endpoints and event_type routing to match unified webhook ingress.
+- Webhooks tab now includes a Webhook Sources section with list, create, rotate, and delete flows plus one-time secret reveal handling and endpoint copy actions.
+- Webhooks tab now includes per-source subscriptions lists and create/delete flows so routing can be managed from Settings.
+- Workflow editor webhook triggers now store only event_type, drop deprecated source fields on load/save, and block save when event_type is empty.
 
 Slack action UX:
 - When an OAuth connection is selected in the Slack action node, the manual token selector ("Select Slack token") and its helper text are hidden. Selecting "Use manual Slack token" reveals the selector again. This avoids confusing, disabled controls and clarifies which auth mode is active.
@@ -281,3 +284,5 @@ OAuth connections grouping (Google Sheets, Microsoft Teams):
  - Slack action tests updated to expect the new `postAsUser` flag in emitted payloads so webhook/OAuth selection behavior remains validated.
 - Slack channel fetch helper now requires explicit workspace connection IDs only and maps auth-expired responses to a reconnect prompt so SlackAction stays aligned with backend token refresh behavior.
 - Slack action channel refreshes now trigger only on workspace connection changes so personal identity updates do not refetch channels.
+
+

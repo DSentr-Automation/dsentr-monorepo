@@ -265,5 +265,3 @@ pub async fn sse_workflow_updates(
         )
         .into_response()
 }
-
-// Protected endpoint to fetch a webhook URL for a workflow (for display in UI)

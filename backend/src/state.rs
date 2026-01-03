@@ -608,12 +608,12 @@ mod tests {
             },
             api_secrets_encryption_key: vec![2u8; 32],
             auth_cookie_secure: true,
-            webhook_secret: "0123456789abcdef0123456789ABCDEF".into(),
             jwt_issuer: "test-issuer".into(),
             jwt_audience: "test-audience".into(),
             workspace_member_limit: crate::config::DEFAULT_WORKSPACE_MEMBER_LIMIT,
             workspace_monthly_run_limit: crate::config::DEFAULT_WORKSPACE_MONTHLY_RUN_LIMIT,
             runaway_limit_5min: crate::config::RUNAWAY_LIMIT_5MIN,
+            webhook_ingress_dedupe_mode: crate::config::WebhookIngressDedupeMode::Off,
         });
 
         let state = AppState {

@@ -46,3 +46,5 @@
 - Added Notion action executors for create/update/query/database operations with type-aware property mapping, connection-scope validation, and error handling aligned with OAuth/token ownership rules.
 - Notion query results now wrap page summary mapping to avoid move/borrow conflicts while streaming page payloads.
 - Notion action helpers now use an `if let` object destructure in select-property mapping, and tests import OAuth token types from the db repository module.
+- Action test configs now set webhook ingress dedupe mode so Config stubs remain complete.
+- Action test configs no longer include `WEBHOOK_SECRET` after removing workflow-scoped webhook settings.

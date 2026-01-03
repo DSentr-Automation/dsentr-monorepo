@@ -629,8 +629,9 @@ impl WorkspaceRepository for PostgresWorkspaceRepository {
     ) -> Result<(), sqlx::Error> {
         sqlx::query!(
             r#"
-            UPDATE workflows
-            SET require_hmac = false
+            UPDATE webhook_sources
+            SET require_hmac = false,
+                updated_at = now()
             WHERE workspace_id = $1
             "#,
             workspace_id

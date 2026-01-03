@@ -32,3 +32,5 @@
 - Workspace invite flows count pending invitations toward the member cap and respect the configurable `WORKSPACE_MEMBER_LIMIT`/`WORKSPACE_MONTHLY_RUN_LIMIT` values.
 - Signup mocks include the `stripe_overage_item_id` workspace field and repository stubs to satisfy billing overage item persistence in auth tests.
 - Auth route tests now initialize OAuth settings with placeholder Asana credentials so the expanded provider list compiles across login/signup flows.
+- Auth route test configs now set webhook ingress dedupe mode to keep Config stubs aligned.
+- Auth route test configs no longer require `WEBHOOK_SECRET` after removing workflow-scoped webhook settings.

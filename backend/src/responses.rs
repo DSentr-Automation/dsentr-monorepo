@@ -4,6 +4,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 #[derive(Serialize, Deserialize)]
 pub struct JsonResponse {
@@ -119,6 +120,34 @@ impl JsonResponse {
 
     pub fn forbidden_with_code(msg: &str, code: &str) -> impl IntoResponse {
         Self::error_with_code(StatusCode::FORBIDDEN, msg, code)
+    }
+
+    #[allow(dead_code)]
+    pub fn success_with_data(msg: &str, data: Value) -> impl IntoResponse {
+        let mut payload = json!({
+            "status": "success",
+            "success": true,
+            "message": msg,
+            "code": null,
+        });
+        if let (Value::Object(base), Value::Object(extra)) = (&mut payload, data) {
+            for (key, value) in extra {
+                base.insert(key, value);
+            }
+        }
+
+        (StatusCode::OK, Json(payload))
+    }
+
+    pub fn success_with_wrapped_data(msg: &str, data: Value) -> impl IntoResponse {
+        let payload = json!({
+            "status": "success",
+            "success": true,
+            "message": msg,
+            "code": null,
+            "data": data,
+        });
+        (StatusCode::OK, Json(payload))
     }
 
     pub fn error_with_code(status: StatusCode, msg: &str, code: &str) -> impl IntoResponse {

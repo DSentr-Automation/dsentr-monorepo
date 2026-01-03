@@ -8,7 +8,6 @@ mod plan;
 mod prelude;
 mod runs;
 mod sse;
-mod webhooks;
 
 pub use concurrency::set_concurrency_limit;
 pub use crud::{
@@ -27,7 +26,3 @@ pub use runs::{
     start_workflow_run,
 };
 pub use sse::{sse_global_runs, sse_run_events, sse_workflow_runs, sse_workflow_updates};
-pub use webhooks::{
-    get_webhook_config, get_webhook_url, regenerate_webhook_signing_key, regenerate_webhook_token,
-    set_webhook_config, webhook_trigger,
-};

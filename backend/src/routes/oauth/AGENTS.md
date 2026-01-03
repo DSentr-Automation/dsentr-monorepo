@@ -48,3 +48,5 @@
 - OAuth route test token repositories now use shared mutable state for `mark_shared` so compile-time stubs match the real repository interface.
 - OAuth route test stubs now update saved tokens in `mark_shared` so workspace promotion tests can succeed when Notion connections are promoted.
 - OAuth route test workspace connection stubs now return a synthetic audit event so workspace promotion flows don't fail on audit logging during tests.
+- OAuth route test configs now include the webhook ingress dedupe mode field to keep Config initialization consistent.
+- OAuth route test configs no longer require `WEBHOOK_SECRET` after removing workflow-scoped webhook settings.

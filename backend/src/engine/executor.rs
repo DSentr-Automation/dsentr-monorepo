@@ -107,14 +107,22 @@ pub async fn execute_run(
         .and_then(|v| v.as_object())
         .cloned()
         .unwrap_or_default();
+    let start_from_value = run.snapshot.get("_start_from_node");
+    let start_from = start_from_value
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string());
+    let start_from_requested = start_from_value.is_some();
     if let Some(initial) = run.snapshot.get("_trigger_context") {
-        let start_node = run
-            .snapshot
-            .get("_start_from_node")
-            .and_then(|v| v.as_str())
-            .and_then(|id| graph.nodes.get(id))
-            .filter(|n| n.kind == "trigger")
-            .or_else(|| graph.nodes.values().find(|n| n.kind == "trigger"));
+        let start_node = if let Some(start_id) = start_from.as_deref() {
+            graph
+                .nodes
+                .get(start_id)
+                .filter(|node| node.kind == "trigger")
+        } else if start_from_requested {
+            None
+        } else {
+            graph.nodes.values().find(|node| node.kind == "trigger")
+        };
         let trigger_key = start_node.map(|n| context_keys(n).0);
         let key = trigger_key.unwrap_or_else(|| "trigger".to_string());
         if !context.contains_key(&key) {
@@ -190,12 +198,6 @@ pub async fn execute_run(
         .unwrap_or(false);
 
     let mut visited: HashSet<String> = HashSet::new();
-    let start_from = run
-        .snapshot
-        .get("_start_from_node")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-
     let resume_from_nodes = run
         .snapshot
         .get("_resume_from_nodes")
@@ -215,8 +217,12 @@ pub async fn execute_run(
         } else {
             Vec::new()
         }
-    } else if let Some(start_id) = start_from {
-        vec![start_id]
+    } else if start_from_requested {
+        if let Some(start_id) = start_from.clone() {
+            vec![start_id]
+        } else {
+            Vec::new()
+        }
     } else {
         let mut s: Vec<String> = graph
             .nodes
@@ -1065,12 +1071,12 @@ mod tests {
                 webhook_secret: "0123456789abcdef0123456789ABCDEF".into(),
             },
             auth_cookie_secure: true,
-            webhook_secret: "0123456789abcdef0123456789ABCDEF".into(),
             jwt_issuer: "test-issuer".into(),
             jwt_audience: "test-audience".into(),
             workspace_member_limit: DEFAULT_WORKSPACE_MEMBER_LIMIT,
             workspace_monthly_run_limit: DEFAULT_WORKSPACE_MONTHLY_RUN_LIMIT,
             runaway_limit_5min: RUNAWAY_LIMIT_5MIN,
+            webhook_ingress_dedupe_mode: crate::config::WebhookIngressDedupeMode::Off,
         });
 
         let workflow_repo: Arc<dyn WorkflowRepository> = Arc::new(repo);
@@ -1374,6 +1380,77 @@ mod tests {
         execute_run(state, run)
             .await
             .expect("success path should still complete");
+    }
+
+    #[tokio::test]
+    async fn execute_run_starts_from_explicit_trigger_node() {
+        let run_id = Uuid::new_v4();
+        let now = OffsetDateTime::now_utc();
+        let run = WorkflowRun {
+            id: run_id,
+            user_id: Uuid::new_v4(),
+            workflow_id: Uuid::new_v4(),
+            workspace_id: Some(Uuid::new_v4()),
+            snapshot: json!({
+                "nodes": [
+                    {"id": "trigger-1", "type": "trigger", "data": {"label": "First"}},
+                    {"id": "trigger-2", "type": "trigger", "data": {"label": "Second"}}
+                ],
+                "edges": [],
+                "_start_from_node": "trigger-2"
+            }),
+            status: "running".into(),
+            error: None,
+            idempotency_key: None,
+            started_at: now,
+            resume_at: now,
+            finished_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let mut repo = MockWorkflowRepository::new();
+        repo.expect_record_run_event().returning(|event| {
+            Box::pin(async move {
+                Ok(WorkflowRunEvent {
+                    id: Uuid::new_v4(),
+                    workflow_run_id: event.workflow_run_id,
+                    workflow_id: event.workflow_id,
+                    workspace_id: event.workspace_id,
+                    triggered_by: event.triggered_by,
+                    connection_type: event.connection_type,
+                    connection_id: event.connection_id,
+                    recorded_at: OffsetDateTime::now_utc(),
+                })
+            })
+        });
+        repo.expect_renew_run_lease()
+            .returning(|_, _, _| Box::pin(async { Ok(()) }));
+        repo.expect_get_run_status()
+            .returning(|_| Box::pin(async { Ok(None) }));
+        let seen_nodes: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen_nodes_clone = seen_nodes.clone();
+        repo.expect_upsert_node_run().times(2).returning(
+            move |_, node_id, _, _, _, _, status, _| {
+                let seen = seen_nodes_clone.clone();
+                let node_run = dummy_node_run(run_id, status);
+                let node_id = node_id.to_string();
+                Box::pin(async move {
+                    seen.lock().expect("seen nodes lock poisoned").push(node_id);
+                    Ok(node_run)
+                })
+            },
+        );
+        repo.expect_complete_workflow_run()
+            .returning(|_, _, _| Box::pin(async { Ok(()) }));
+
+        let state = build_state(repo);
+
+        execute_run(state, run).await.expect("run should complete");
+
+        let recorded = seen_nodes.lock().expect("seen nodes lock poisoned").clone();
+        assert_eq!(recorded.len(), 2);
+        assert!(recorded.iter().all(|id| id == "trigger-2"));
     }
 
     #[tokio::test]
