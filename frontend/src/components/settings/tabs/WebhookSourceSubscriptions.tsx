@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import ConfirmDialog from '@/components/ui/dialog/ConfirmDialog'
 import { errorMessage } from '@/lib/errorMessage'
 import {
-  createWebhookSubscription,
-  deleteWebhookSubscription,
-  listWebhookSubscriptions,
+  createWebhookSubscriptionForSource,
+  deleteSubscription,
+  listWebhookSubscriptionsForSource,
   type WebhookSubscription
 } from '@/lib/webhookSubscriptionsApi'
 import type { WebhookSource } from '@/lib/webhookSourcesApi'
@@ -121,7 +121,7 @@ export default function WebhookSourceSubscriptions({
     }
     setLoading(true)
     try {
-      const results = await listWebhookSubscriptions(workspaceId, source.id)
+      const results = await listWebhookSubscriptionsForSource(source.id)
       setSubscriptions(results)
       setError(null)
       setLoadedOnce(true)
@@ -130,7 +130,7 @@ export default function WebhookSourceSubscriptions({
     } finally {
       setLoading(false)
     }
-  }, [workspaceId, source.id])
+  }, [source.id])
 
   useEffect(() => {
     if (expanded && !loadedOnce) {
@@ -187,7 +187,7 @@ export default function WebhookSourceSubscriptions({
     setCreateError(null)
     setError(null)
     try {
-      await createWebhookSubscription(workspaceId, source.id, {
+      await createWebhookSubscriptionForSource(source.id, {
         workflowId: createWorkflowId,
         triggerNodeId: createTriggerId,
         eventType: trimmedEventType
@@ -216,7 +216,7 @@ export default function WebhookSourceSubscriptions({
     setDeleteBusy(true)
     setError(null)
     try {
-      await deleteWebhookSubscription(workspaceId, source.id, target.id)
+      await deleteSubscription(target.id)
       setSubscriptions((prev) => prev.filter((entry) => entry.id !== target.id))
     } catch (err) {
       setError(errorMessage(err))

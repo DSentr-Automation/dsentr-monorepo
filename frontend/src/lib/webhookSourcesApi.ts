@@ -120,7 +120,7 @@ export async function listWebhookSources(
   workspaceId: string
 ): Promise<WebhookSource[]> {
   const res = await fetch(
-    `${API_BASE_URL}/api/workspaces/${workspaceId}/webhook-sources`,
+    `${API_BASE_URL}/api/workspaces/${workspaceId}/webhooks/sources`,
     { credentials: 'include' }
   )
   const body = await parseJson(res)
@@ -138,7 +138,7 @@ export async function createWebhookSource(
 ): Promise<WebhookSourceSecretResult> {
   const csrfToken = await getCsrfToken()
   const res = await fetch(
-    `${API_BASE_URL}/api/workspaces/${workspaceId}/webhook-sources`,
+    `${API_BASE_URL}/api/workspaces/${workspaceId}/webhooks/sources`,
     {
       method: 'POST',
       credentials: 'include',
@@ -169,7 +169,7 @@ export async function rotateWebhookSourceSecret(
 ): Promise<WebhookSourceSecretResult> {
   const csrfToken = await getCsrfToken()
   const res = await fetch(
-    `${API_BASE_URL}/api/webhook-sources/${sourceId}/rotate-secret`,
+    `${API_BASE_URL}/api/workspaces/webhooks/sources/${sourceId}/rotate-secret`,
     {
       method: 'POST',
       credentials: 'include',
@@ -190,15 +190,21 @@ export async function rotateWebhookSourceSecret(
   return { source: normalized, secret: extractSecret(body) }
 }
 
-export async function deleteWebhookSource(sourceId: string): Promise<void> {
+export async function deleteWebhookSource(
+  workspaceId: string,
+  sourceId: string
+): Promise<void> {
   const csrfToken = await getCsrfToken()
-  const res = await fetch(`${API_BASE_URL}/api/webhook-sources/${sourceId}`, {
-    method: 'DELETE',
-    credentials: 'include',
-    headers: {
-      'x-csrf-token': csrfToken
+  const res = await fetch(
+    `${API_BASE_URL}/api/workspaces/${workspaceId}/webhooks/sources/${sourceId}`,
+    {
+      method: 'DELETE',
+      credentials: 'include',
+      headers: {
+        'x-csrf-token': csrfToken
+      }
     }
-  })
+  )
   const body = await parseJson(res)
   if (!res.ok || body?.success === false) {
     raiseForStatus(body, 'Failed to delete webhook source')
