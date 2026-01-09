@@ -257,7 +257,11 @@ export default function WebhooksTab() {
     setSourcesError(null)
     setActionBusy({ id: target.id, action: 'rotate' })
     try {
-      const result = await rotateWebhookSourceSecret(target.id)
+      if (!activeWorkspaceId) return
+      const result = await rotateWebhookSourceSecret(
+        activeWorkspaceId,
+        target.id
+      )
       setSources((prev) =>
         prev.map((source) =>
           source.id === result.source.id ? result.source : source

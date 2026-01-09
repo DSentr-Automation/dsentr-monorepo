@@ -5,6 +5,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use std::any;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -91,6 +92,7 @@ struct DedupeKeyContext {
 #[derive(Debug, Deserialize)]
 pub struct CreateWebhookSourcePayload {
     name: Option<String>,
+    require_hmac: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -466,6 +468,7 @@ async fn handle_create_webhook_source(
     memberships: &[WorkspaceMembershipSummary],
     workspace_id: Uuid,
     name: String,
+    require_hmac: bool,
 ) -> Response {
     let role = match workspace_role(memberships, workspace_id) {
         Ok(role) => role,
@@ -475,18 +478,37 @@ async fn handle_create_webhook_source(
         return resp;
     }
 
-    match source_repo.create_webhook_source(workspace_id, &name).await {
-        Ok(source) => JsonResponse::success_with_wrapped_data(
-            "Webhook source created",
-            json!({ "source": source }),
-        )
-        .into_response(),
-        Err(err) if is_unique_violation(&err) => {
-            JsonResponse::conflict("Webhook source already exists").into_response()
+    // Use the concrete repository to access the new method
+    if let Some(pg_repo) = (source_repo as any::Any).downcast_ref::<PostgresWebhookSourceRepository>() {
+        match pg_repo.create_webhook_source_with_secret(workspace_id, &name, require_hmac).await {
+            Ok((source, secret)) => JsonResponse::success_with_wrapped_data(
+                "Webhook source created",
+                json!({ "source": source, "secret": secret }),
+            )
+            .into_response(),
+            Err(err) if is_unique_violation(&err) => {
+                JsonResponse::conflict("Webhook source already exists").into_response()
+            }
+            Err(err) => {
+                error!(?err, %workspace_id, "failed to create webhook source");
+                JsonResponse::server_error("Failed to create webhook source").into_response()
+            }
         }
-        Err(err) => {
-            error!(?err, %workspace_id, "failed to create webhook source");
-            JsonResponse::server_error("Failed to create webhook source").into_response()
+    } else {
+        // Fallback to original method for other repository implementations
+        match source_repo.create_webhook_source(workspace_id, &name).await {
+            Ok(source) => JsonResponse::success_with_wrapped_data(
+                "Webhook source created",
+                json!({ "source": source }),
+            )
+            .into_response(),
+            Err(err) if is_unique_violation(&err) => {
+                JsonResponse::conflict("Webhook source already exists").into_response()
+            }
+            Err(err) => {
+                error!(?err, %workspace_id, "failed to create webhook source");
+                JsonResponse::server_error("Failed to create webhook source").into_response()
+            }
         }
     }
 }
@@ -505,21 +527,40 @@ async fn handle_rotate_webhook_source_secret(
         return resp;
     }
 
-    match source_repo
-        .rotate_webhook_source_secret(workspace_id, source_id)
-        .await
-    {
-        Ok(source) => JsonResponse::success_with_wrapped_data(
-            "Webhook source secret rotated",
-            json!({ "source": source }),
-        )
-        .into_response(),
-        Err(sqlx::Error::RowNotFound) => {
-            JsonResponse::not_found("Webhook source not found").into_response()
+    // Use the concrete repository to access the new method
+    if let Some(pg_repo) = (source_repo as any::Any).downcast_ref::<PostgresWebhookSourceRepository>() {
+        match pg_repo.rotate_webhook_source_secret_with_secret(workspace_id, source_id).await {
+            Ok((source, secret)) => JsonResponse::success_with_wrapped_data(
+                "Webhook source secret rotated",
+                json!({ "source": source, "secret": secret }),
+            )
+            .into_response(),
+            Err(sqlx::Error::RowNotFound) => {
+                JsonResponse::not_found("Webhook source not found").into_response()
+            }
+            Err(err) => {
+                error!(?err, %workspace_id, %source_id, "failed to rotate webhook source secret");
+                JsonResponse::server_error("Failed to rotate webhook source secret").into_response()
+            }
         }
-        Err(err) => {
-            error!(?err, %workspace_id, %source_id, "failed to rotate webhook source secret");
-            JsonResponse::server_error("Failed to rotate webhook source secret").into_response()
+    } else {
+        // Fallback to original method for other repository implementations
+        match source_repo
+            .rotate_webhook_source_secret(workspace_id, source_id)
+            .await
+        {
+            Ok(source) => JsonResponse::success_with_wrapped_data(
+                "Webhook source secret rotated",
+                json!({ "source": source }),
+            )
+            .into_response(),
+            Err(sqlx::Error::RowNotFound) => {
+                JsonResponse::not_found("Webhook source not found").into_response()
+            }
+            Err(err) => {
+                error!(?err, %workspace_id, %source_id, "failed to rotate webhook source secret");
+                JsonResponse::server_error("Failed to rotate webhook source secret").into_response()
+            }
         }
     }
 }
@@ -959,6 +1000,8 @@ pub async fn create_webhook_source(
         Err(resp) => return resp,
     };
 
+    let require_hmac = payload.require_hmac.unwrap_or(true);
+
     let source_repo = PostgresWebhookSourceRepository {
         pool: (*app_state.db_pool).clone(),
         encryption_key: app_state.config.api_secrets_encryption_key.clone(),
@@ -969,7 +1012,7 @@ pub async fn create_webhook_source(
         Err(resp) => return resp,
     };
 
-    handle_create_webhook_source(&source_repo, &memberships, workspace_id, name).await
+    handle_create_webhook_source(&source_repo, &memberships, workspace_id, name, require_hmac).await
 }
 
 pub async fn rotate_webhook_source_secret(

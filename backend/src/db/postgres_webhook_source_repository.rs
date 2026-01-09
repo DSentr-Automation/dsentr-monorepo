@@ -47,6 +47,43 @@ impl WebhookSourceRepository for PostgresWebhookSourceRepository {
         .await
     }
 
+    async fn create_webhook_source_with_secret(
+        &self,
+        workspace_id: Uuid,
+        name: &str,
+        require_hmac: bool,
+    ) -> Result<(WebhookSource, String), sqlx::Error> {
+        let plaintext = Uuid::new_v4().to_string();
+        let encrypted = encrypt_secret(&self.encryption_key, &plaintext)
+            .map_err(|_| sqlx::Error::RowNotFound)?;
+
+        let source = sqlx::query_as!(
+            WebhookSource,
+            r#"
+            INSERT INTO webhook_sources (workspace_id, name, secret, require_hmac)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id,
+                      workspace_id,
+                      name,
+                      secret,
+                      require_hmac,
+                      replay_window_sec,
+                      last_seen_at,
+                      enabled,
+                      created_at,
+                      updated_at
+            "#,
+            workspace_id,
+            name,
+            encrypted,
+            require_hmac
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok((source, plaintext))
+    }
+
     async fn find_webhook_source_by_id(
         &self,
         source_id: Uuid,
@@ -154,6 +191,43 @@ impl WebhookSourceRepository for PostgresWebhookSourceRepository {
         )
         .fetch_one(&self.pool)
         .await
+    }
+
+    async fn rotate_webhook_source_secret_with_secret(
+        &self,
+        workspace_id: Uuid,
+        source_id: Uuid,
+    ) -> Result<(WebhookSource, String), sqlx::Error> {
+        let plaintext = Uuid::new_v4().to_string();
+        let encrypted = encrypt_secret(&self.encryption_key, &plaintext)
+            .map_err(|_| sqlx::Error::RowNotFound)?;
+
+        let source = sqlx::query_as!(
+            WebhookSource,
+            r#"
+            UPDATE webhook_sources
+            SET secret = $3
+            WHERE workspace_id = $1
+              AND id = $2
+            RETURNING id,
+                      workspace_id,
+                      name,
+                      secret,
+                      require_hmac,
+                      replay_window_sec,
+                      last_seen_at,
+                      enabled,
+                      created_at,
+                      updated_at
+            "#,
+            workspace_id,
+            source_id,
+            encrypted
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok((source, plaintext))
     }
 
     async fn delete_webhook_source(

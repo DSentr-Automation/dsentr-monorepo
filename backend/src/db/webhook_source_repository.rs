@@ -11,6 +11,13 @@ pub trait WebhookSourceRepository: Send + Sync {
         name: &str,
     ) -> Result<WebhookSource, sqlx::Error>;
 
+    async fn create_webhook_source_with_secret(
+        &self,
+        workspace_id: Uuid,
+        name: &str,
+        require_hmac: bool,
+    ) -> Result<(WebhookSource, String), sqlx::Error>;
+
     async fn find_webhook_source_by_id(
         &self,
         source_id: Uuid,
@@ -47,4 +54,10 @@ pub trait WebhookSourceRepository: Send + Sync {
         workspace_id: Uuid,
         source_id: Uuid,
     ) -> Result<WebhookSource, sqlx::Error>;
+
+    async fn rotate_webhook_source_secret_with_secret(
+        &self,
+        workspace_id: Uuid,
+        source_id: Uuid,
+    ) -> Result<(WebhookSource, String), sqlx::Error>;
 }

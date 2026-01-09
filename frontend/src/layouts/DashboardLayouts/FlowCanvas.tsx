@@ -6,6 +6,7 @@ import {
   useState,
   type DragEvent
 } from 'react'
+import { v4 as uuidv4 } from 'uuid'
 import {
   ReactFlow,
   Background,
@@ -1161,7 +1162,12 @@ export default function FlowCanvas({
       const dropDescriptor = normalizeDropType(rawType)
       const label = generateUniqueLabel(dropDescriptor.labelBase, currentNodes)
       const nodeIdPrefix = dropDescriptor.idPrefix.replace(/[^a-z0-9]+/gi, '-')
-      const newNodeId = `${nodeIdPrefix}-${Date.now()}`
+
+      // Use UUID for trigger nodes to ensure backend compatibility
+      const newNodeId =
+        dropDescriptor.nodeType === 'trigger'
+          ? uuidv4()
+          : `${nodeIdPrefix}-${Date.now()}`
       const newNode: WorkflowNode = {
         id: newNodeId,
         type: dropDescriptor.nodeType,

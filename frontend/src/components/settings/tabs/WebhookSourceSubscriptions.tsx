@@ -15,6 +15,19 @@ type TriggerOption = {
   label: string
 }
 
+// Check if a string is a valid UUID
+function isValidUuid(str: string): boolean {
+  const uuidRegex =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+  return uuidRegex.test(str)
+}
+
+// Check if a trigger node ID is a legacy timestamp-based ID
+function isLegacyTriggerId(nodeId: string): boolean {
+  // Legacy IDs are like "trigger-1640995200000"
+  return nodeId.startsWith('trigger-') && !isValidUuid(nodeId)
+}
+
 type WebhookSourceSubscriptionsProps = {
   source: WebhookSource
   workspaceId: string | null
@@ -121,7 +134,10 @@ export default function WebhookSourceSubscriptions({
     }
     setLoading(true)
     try {
-      const results = await listWebhookSubscriptionsForSource(source.id)
+      const results = await listWebhookSubscriptionsForSource(
+        workspaceId,
+        source.id
+      )
       setSubscriptions(results)
       setError(null)
       setLoadedOnce(true)
@@ -130,7 +146,7 @@ export default function WebhookSourceSubscriptions({
     } finally {
       setLoading(false)
     }
-  }, [source.id])
+  }, [workspaceId, source.id])
 
   useEffect(() => {
     if (expanded && !loadedOnce) {
@@ -183,11 +199,21 @@ export default function WebhookSourceSubscriptions({
       setCreateError('Select a webhook trigger for this subscription.')
       return
     }
+    if (isLegacyTriggerId(createTriggerId)) {
+      setCreateError(
+        'This workflow uses legacy trigger IDs. Recreate the webhook trigger node to continue.'
+      )
+      return
+    }
     setCreateBusy(true)
     setCreateError(null)
     setError(null)
     try {
-      await createWebhookSubscriptionForSource(source.id, {
+      if (!workspaceId) {
+        setCreateError('Select a workspace before adding subscriptions.')
+        return
+      }
+      await createWebhookSubscriptionForSource(workspaceId, source.id, {
         workflowId: createWorkflowId,
         triggerNodeId: createTriggerId,
         eventType: trimmedEventType
@@ -216,7 +242,7 @@ export default function WebhookSourceSubscriptions({
     setDeleteBusy(true)
     setError(null)
     try {
-      await deleteSubscription(target.id)
+      await deleteSubscription(workspaceId, source.id, target.id)
       setSubscriptions((prev) => prev.filter((entry) => entry.id !== target.id))
     } catch (err) {
       setError(errorMessage(err))
@@ -374,8 +400,15 @@ export default function WebhookSourceSubscriptions({
                       <option value="">No webhook triggers</option>
                     ) : (
                       triggerOptions.map((trigger) => (
-                        <option key={trigger.id} value={trigger.id}>
+                        <option
+                          key={trigger.id}
+                          value={trigger.id}
+                          disabled={isLegacyTriggerId(trigger.id)}
+                        >
                           {trigger.label}
+                          {isLegacyTriggerId(trigger.id)
+                            ? ' (Legacy - recreate trigger)'
+                            : ''}
                         </option>
                       ))
                     )}

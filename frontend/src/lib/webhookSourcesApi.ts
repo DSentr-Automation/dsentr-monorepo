@@ -165,11 +165,12 @@ export async function createWebhookSource(
 }
 
 export async function rotateWebhookSourceSecret(
+  workspaceId: string,
   sourceId: string
 ): Promise<WebhookSourceSecretResult> {
   const csrfToken = await getCsrfToken()
   const res = await fetch(
-    `${API_BASE_URL}/api/workspaces/webhooks/sources/${sourceId}/rotate-secret`,
+    `${API_BASE_URL}/api/workspaces/${workspaceId}/webhooks/sources/${sourceId}/rotate-secret`,
     {
       method: 'POST',
       credentials: 'include',

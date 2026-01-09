@@ -99,10 +99,11 @@ function extractSubscription(body: any): any | null {
 }
 
 export async function listWebhookSubscriptionsForSource(
+  workspaceId: string,
   sourceId: string
 ): Promise<WebhookSubscription[]> {
   const res = await fetch(
-    `${API_BASE_URL}/api/webhook-sources/${sourceId}/subscriptions`,
+    `${API_BASE_URL}/api/workspaces/${workspaceId}/webhooks/sources/${sourceId}/subscriptions`,
     {
       credentials: 'include'
     }
@@ -117,12 +118,13 @@ export async function listWebhookSubscriptionsForSource(
 }
 
 export async function createWebhookSubscriptionForSource(
+  workspaceId: string,
   sourceId: string,
   payload: { workflowId: string; triggerNodeId: string; eventType: string }
 ): Promise<WebhookSubscription> {
   const csrfToken = await getCsrfToken()
   const res = await fetch(
-    `${API_BASE_URL}/api/webhook-sources/${sourceId}/subscriptions`,
+    `${API_BASE_URL}/api/workspaces/${workspaceId}/webhooks/sources/${sourceId}/subscriptions`,
     {
       method: 'POST',
       credentials: 'include',
@@ -150,11 +152,13 @@ export async function createWebhookSubscriptionForSource(
 }
 
 export async function deleteSubscription(
+  workspaceId: string,
+  sourceId: string,
   subscriptionId: string
 ): Promise<void> {
   const csrfToken = await getCsrfToken()
   const res = await fetch(
-    `${API_BASE_URL}/api/subscriptions/${subscriptionId}`,
+    `${API_BASE_URL}/api/workspaces/${workspaceId}/webhooks/sources/${sourceId}/subscriptions/${subscriptionId}`,
     {
       method: 'DELETE',
       credentials: 'include',
