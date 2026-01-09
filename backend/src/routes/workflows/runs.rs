@@ -42,8 +42,6 @@ pub struct StartWorkflowRunRequest {
     pub priority: Option<i32>,
     #[serde(alias = "startFromNodeId")]
     pub start_from_node_id: Option<String>,
-    #[serde(rename = "trigger_node_id", alias = "triggerNodeId")]
-    pub legacy_trigger_node_id: Option<String>,
 }
 
 pub(crate) fn redact_secrets(value: &mut serde_json::Value) {
@@ -92,22 +90,6 @@ pub(crate) fn redact_node_runs(mut node_runs: Vec<WorkflowNodeRun>) -> Vec<Workf
 struct TriggerStartMeta {
     node_id: String,
     trigger_type: String,
-}
-
-#[allow(clippy::result_large_err)]
-fn normalize_start_from_node_id(
-    start_from_node_id: Option<String>,
-    legacy_trigger_node_id: Option<String>,
-) -> Result<Option<String>, Response> {
-    match (start_from_node_id, legacy_trigger_node_id) {
-        (Some(_), Some(_)) => Err(JsonResponse::bad_request(
-            "Provide only start_from_node_id or trigger_node_id.",
-        )
-        .into_response()),
-        (Some(id), None) => Ok(Some(id)),
-        (None, Some(id)) => Ok(Some(id)),
-        (None, None) => Ok(None),
-    }
 }
 
 fn trigger_type_from_node(node: &serde_json::Value) -> String {
@@ -319,26 +301,19 @@ pub async fn start_workflow_run(
         }
     }
 
-    let (idempotency_key_owned, trigger_ctx, priority, start_from_node_id, legacy_trigger_node_id) =
-        match payload {
-            Some(Json(req)) => (
-                req.idempotency_key,
-                req.context,
-                req.priority,
-                req.start_from_node_id,
-                req.legacy_trigger_node_id,
-            ),
-            None => (None, None, None, None, None),
-        };
+    let (idempotency_key_owned, trigger_ctx, priority, start_from_node_id) = match payload {
+        Some(Json(req)) => (
+            req.idempotency_key,
+            req.context,
+            req.priority,
+            req.start_from_node_id,
+        ),
+        None => (None, None, None, None),
+    };
     let idempotency_key = idempotency_key_owned.as_deref();
 
     // Clone raw workflow JSON
     let mut snapshot = wf.data.clone();
-    let start_from_node_id =
-        match normalize_start_from_node_id(start_from_node_id, legacy_trigger_node_id) {
-            Ok(value) => value,
-            Err(resp) => return resp,
-        };
     let mut trigger_context = trigger_ctx;
     if let Some(start_id) = start_from_node_id.as_deref() {
         let meta = match validate_trigger_start(&snapshot, start_id) {
@@ -679,8 +654,6 @@ pub struct RerunRequest {
     pub context: Option<serde_json::Value>,
     #[serde(alias = "startFromNodeId")]
     pub start_from_node_id: Option<String>,
-    #[serde(rename = "trigger_node_id", alias = "triggerNodeId")]
-    pub legacy_trigger_node_id: Option<String>,
 }
 
 pub async fn rerun_workflow_run(
@@ -725,13 +698,7 @@ pub async fn rerun_workflow_run(
         idempotency_key,
         context,
         start_from_node_id,
-        legacy_trigger_node_id,
     } = payload;
-    let start_from_node_id =
-        match normalize_start_from_node_id(start_from_node_id, legacy_trigger_node_id) {
-            Ok(value) => value,
-            Err(resp) => return resp,
-        };
 
     let mut snapshot = base_run.snapshot.clone();
     let mut trigger_context = context.or_else(|| snapshot.get("_trigger_context").cloned());
@@ -1350,7 +1317,6 @@ mod tests {
                 context: None,
                 priority: None,
                 start_from_node_id: Some("schedule-1".to_string()),
-                legacy_trigger_node_id: None,
             })),
         )
         .await;
@@ -1439,7 +1405,6 @@ mod tests {
                 context: None,
                 priority: None,
                 start_from_node_id: Some("missing-node".to_string()),
-                legacy_trigger_node_id: None,
             })),
         )
         .await;
@@ -1508,7 +1473,6 @@ mod tests {
                 context: None,
                 priority: None,
                 start_from_node_id: Some("action-1".to_string()),
-                legacy_trigger_node_id: None,
             })),
         )
         .await;
@@ -1571,7 +1535,6 @@ mod tests {
                 idempotency_key: None,
                 context: None,
                 start_from_node_id: None,
-                legacy_trigger_node_id: None,
             }),
         )
         .await;

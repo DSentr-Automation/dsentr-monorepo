@@ -282,7 +282,7 @@ export default function WebhooksTab() {
     } finally {
       setActionBusy(null)
     }
-  }, [pendingRotate, actionBusy, resolveSourceEndpoint])
+  }, [pendingRotate, actionBusy, resolveSourceEndpoint, activeWorkspaceId])
 
   const handleConfirmDeleteSource = useCallback(async () => {
     if (!pendingDelete || actionBusy) return
@@ -299,7 +299,7 @@ export default function WebhooksTab() {
     } finally {
       setActionBusy(null)
     }
-  }, [pendingDelete, actionBusy])
+  }, [pendingDelete, actionBusy, activeWorkspaceId])
   return (
     <div className="space-y-4 relative">
       <div className="border-t border-zinc-200 dark:border-zinc-700 pt-3">

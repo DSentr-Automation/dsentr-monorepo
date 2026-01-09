@@ -5,11 +5,11 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use std::any;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
+use std::any;
 use std::future::Future;
 use time::OffsetDateTime;
 use tracing::{error, info, warn, Span};
@@ -479,8 +479,13 @@ async fn handle_create_webhook_source(
     }
 
     // Use the concrete repository to access the new method
-    if let Some(pg_repo) = (source_repo as any::Any).downcast_ref::<PostgresWebhookSourceRepository>() {
-        match pg_repo.create_webhook_source_with_secret(workspace_id, &name, require_hmac).await {
+    if let Some(pg_repo) =
+        (source_repo as any::Any).downcast_ref::<PostgresWebhookSourceRepository>()
+    {
+        match pg_repo
+            .create_webhook_source_with_secret(workspace_id, &name, require_hmac)
+            .await
+        {
             Ok((source, secret)) => JsonResponse::success_with_wrapped_data(
                 "Webhook source created",
                 json!({ "source": source, "secret": secret }),
@@ -528,8 +533,13 @@ async fn handle_rotate_webhook_source_secret(
     }
 
     // Use the concrete repository to access the new method
-    if let Some(pg_repo) = (source_repo as any::Any).downcast_ref::<PostgresWebhookSourceRepository>() {
-        match pg_repo.rotate_webhook_source_secret_with_secret(workspace_id, source_id).await {
+    if let Some(pg_repo) =
+        (source_repo as any::Any).downcast_ref::<PostgresWebhookSourceRepository>()
+    {
+        match pg_repo
+            .rotate_webhook_source_secret_with_secret(workspace_id, source_id)
+            .await
+        {
             Ok((source, secret)) => JsonResponse::success_with_wrapped_data(
                 "Webhook source secret rotated",
                 json!({ "source": source, "secret": secret }),

@@ -15,19 +15,6 @@ type TriggerOption = {
   label: string
 }
 
-// Check if a string is a valid UUID
-function isValidUuid(str: string): boolean {
-  const uuidRegex =
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-  return uuidRegex.test(str)
-}
-
-// Check if a trigger node ID is a legacy timestamp-based ID
-function isLegacyTriggerId(nodeId: string): boolean {
-  // Legacy IDs are like "trigger-1640995200000"
-  return nodeId.startsWith('trigger-') && !isValidUuid(nodeId)
-}
-
 type WebhookSourceSubscriptionsProps = {
   source: WebhookSource
   workspaceId: string | null
@@ -199,12 +186,7 @@ export default function WebhookSourceSubscriptions({
       setCreateError('Select a webhook trigger for this subscription.')
       return
     }
-    if (isLegacyTriggerId(createTriggerId)) {
-      setCreateError(
-        'This workflow uses legacy trigger IDs. Recreate the webhook trigger node to continue.'
-      )
-      return
-    }
+
     setCreateBusy(true)
     setCreateError(null)
     setError(null)
@@ -400,15 +382,8 @@ export default function WebhookSourceSubscriptions({
                       <option value="">No webhook triggers</option>
                     ) : (
                       triggerOptions.map((trigger) => (
-                        <option
-                          key={trigger.id}
-                          value={trigger.id}
-                          disabled={isLegacyTriggerId(trigger.id)}
-                        >
+                        <option key={trigger.id} value={trigger.id}>
                           {trigger.label}
-                          {isLegacyTriggerId(trigger.id)
-                            ? ' (Legacy - recreate trigger)'
-                            : ''}
                         </option>
                       ))
                     )}

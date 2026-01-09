@@ -32,7 +32,7 @@
 - Workflow log listing now validates workspace membership and includes entries from all actors; deletions emit workspace-scoped history records so change logs capture who removed workflows.
 - Added optimistic concurrency and workflow SSE streaming so workspace users get the latest graph automatically and stale saves return 409 with the authoritative payload.
 - Manual run requests accept `start_from_node_id` and seed `_start_from_node` when the target trigger exists so multi-trigger workflows only dispatch the chosen entry instead of activating every trigger.
-- Manual run creation now validates trigger-node selection, rejects conflicting legacy trigger selectors, and stamps trigger metadata into `_trigger_context`.
+- Manual run creation now validates trigger-node selection and stamps trigger metadata into `_trigger_context`.
 - Workflow schedule sync now recognizes Notion polling triggers, persisting their connection/database config and preserving cursor state between updates.
 - Workflow route test configs now include webhook ingress dedupe mode to keep Config stubs aligned.
 - Removed workflow-scoped webhook endpoints and token helpers now that inbound webhook traffic is handled through source-based ingress.

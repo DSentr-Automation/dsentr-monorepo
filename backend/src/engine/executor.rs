@@ -1393,11 +1393,11 @@ mod tests {
             workspace_id: Some(Uuid::new_v4()),
             snapshot: json!({
                 "nodes": [
-                    {"id": "trigger-1", "type": "trigger", "data": {"label": "First"}},
-                    {"id": "trigger-2", "type": "trigger", "data": {"label": "Second"}}
+                    {"id": "550e8400-e29b-41d4-a716-446655440001", "type": "trigger", "data": {"label": "First"}},
+                    {"id": "550e8400-e29b-41d4-a716-446655440002", "type": "trigger", "data": {"label": "Second"}}
                 ],
                 "edges": [],
-                "_start_from_node": "trigger-2"
+                "_start_from_node": "550e8400-e29b-41d4-a716-446655440002"
             }),
             status: "running".into(),
             error: None,
@@ -1450,7 +1450,9 @@ mod tests {
 
         let recorded = seen_nodes.lock().expect("seen nodes lock poisoned").clone();
         assert_eq!(recorded.len(), 2);
-        assert!(recorded.iter().all(|id| id == "trigger-2"));
+        assert!(recorded
+            .iter()
+            .all(|id| id == "550e8400-e29b-41d4-a716-446655440002"));
     }
 
     #[tokio::test]
