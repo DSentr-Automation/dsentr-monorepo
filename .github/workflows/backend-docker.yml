@@ -63,3 +63,13 @@ jobs:
           elif [ "${GITHUB_REF}" = "refs/heads/develop" ]; then
             docker push ${{ secrets.DOCKER_REPO }}:dev
           fi
+      - name: Trigger Render Deploy
+        if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/develop'
+        run: |
+          if [ "${GITHUB_REF}" = "refs/heads/master" ]; then
+            echo "Triggering Render PROD deploy"
+            curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
+          elif [ "${GITHUB_REF}" = "refs/heads/develop" ]; then
+            echo "Triggering Render DEV deploy"
+            curl -X POST "${{ secrets.RENDER_DEV_DEPLOY_HOOK_URL }}"
+          fi
