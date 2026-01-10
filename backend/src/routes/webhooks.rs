@@ -9,7 +9,6 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
-use std::any;
 use std::future::Future;
 use time::OffsetDateTime;
 use tracing::{error, info, warn, Span};
@@ -474,46 +473,28 @@ async fn handle_create_webhook_source(
         Ok(role) => role,
         Err(resp) => return resp,
     };
+
     if let Err(resp) = ensure_writer_role(role, "webhook sources") {
         return resp;
     }
 
-    // Use the concrete repository to access the new method
-    if let Some(pg_repo) =
-        (source_repo as any::Any).downcast_ref::<PostgresWebhookSourceRepository>()
+    match source_repo
+        .create_webhook_source_with_secret(workspace_id, &name, require_hmac)
+        .await
     {
-        match pg_repo
-            .create_webhook_source_with_secret(workspace_id, &name, require_hmac)
-            .await
-        {
-            Ok((source, secret)) => JsonResponse::success_with_wrapped_data(
-                "Webhook source created",
-                json!({ "source": source, "secret": secret }),
-            )
-            .into_response(),
-            Err(err) if is_unique_violation(&err) => {
-                JsonResponse::conflict("Webhook source already exists").into_response()
-            }
-            Err(err) => {
-                error!(?err, %workspace_id, "failed to create webhook source");
-                JsonResponse::server_error("Failed to create webhook source").into_response()
-            }
+        Ok((source, secret)) => JsonResponse::success_with_wrapped_data(
+            "Webhook source created",
+            json!({ "source": source, "secret": secret }),
+        )
+        .into_response(),
+
+        Err(err) if is_unique_violation(&err) => {
+            JsonResponse::conflict("Webhook source already exists").into_response()
         }
-    } else {
-        // Fallback to original method for other repository implementations
-        match source_repo.create_webhook_source(workspace_id, &name).await {
-            Ok(source) => JsonResponse::success_with_wrapped_data(
-                "Webhook source created",
-                json!({ "source": source }),
-            )
-            .into_response(),
-            Err(err) if is_unique_violation(&err) => {
-                JsonResponse::conflict("Webhook source already exists").into_response()
-            }
-            Err(err) => {
-                error!(?err, %workspace_id, "failed to create webhook source");
-                JsonResponse::server_error("Failed to create webhook source").into_response()
-            }
+
+        Err(err) => {
+            error!(?err, %workspace_id, "failed to create webhook source");
+            JsonResponse::server_error("Failed to create webhook source").into_response()
         }
     }
 }
@@ -528,49 +509,28 @@ async fn handle_rotate_webhook_source_secret(
         Ok(role) => role,
         Err(resp) => return resp,
     };
+
     if let Err(resp) = ensure_writer_role(role, "webhook sources") {
         return resp;
     }
 
-    // Use the concrete repository to access the new method
-    if let Some(pg_repo) =
-        (source_repo as any::Any).downcast_ref::<PostgresWebhookSourceRepository>()
+    match source_repo
+        .rotate_webhook_source_secret_with_secret(workspace_id, source_id)
+        .await
     {
-        match pg_repo
-            .rotate_webhook_source_secret_with_secret(workspace_id, source_id)
-            .await
-        {
-            Ok((source, secret)) => JsonResponse::success_with_wrapped_data(
-                "Webhook source secret rotated",
-                json!({ "source": source, "secret": secret }),
-            )
-            .into_response(),
-            Err(sqlx::Error::RowNotFound) => {
-                JsonResponse::not_found("Webhook source not found").into_response()
-            }
-            Err(err) => {
-                error!(?err, %workspace_id, %source_id, "failed to rotate webhook source secret");
-                JsonResponse::server_error("Failed to rotate webhook source secret").into_response()
-            }
+        Ok((source, secret)) => JsonResponse::success_with_wrapped_data(
+            "Webhook source secret rotated",
+            json!({ "source": source, "secret": secret }),
+        )
+        .into_response(),
+
+        Err(sqlx::Error::RowNotFound) => {
+            JsonResponse::not_found("Webhook source not found").into_response()
         }
-    } else {
-        // Fallback to original method for other repository implementations
-        match source_repo
-            .rotate_webhook_source_secret(workspace_id, source_id)
-            .await
-        {
-            Ok(source) => JsonResponse::success_with_wrapped_data(
-                "Webhook source secret rotated",
-                json!({ "source": source }),
-            )
-            .into_response(),
-            Err(sqlx::Error::RowNotFound) => {
-                JsonResponse::not_found("Webhook source not found").into_response()
-            }
-            Err(err) => {
-                error!(?err, %workspace_id, %source_id, "failed to rotate webhook source secret");
-                JsonResponse::server_error("Failed to rotate webhook source secret").into_response()
-            }
+
+        Err(err) => {
+            error!(?err, %workspace_id, %source_id, "failed to rotate webhook source secret");
+            JsonResponse::server_error("Failed to rotate webhook source secret").into_response()
         }
     }
 }
@@ -1896,11 +1856,12 @@ mod tests {
 
     #[async_trait]
     impl WebhookSourceRepository for StubWebhookSourceRepo {
-        async fn create_webhook_source(
+        async fn create_webhook_source_with_secret(
             &self,
-            _workspace_id: Uuid,
-            _name: &str,
-        ) -> Result<WebhookSource, sqlx::Error> {
+            _: Uuid,
+            _: &str,
+            _: bool,
+        ) -> Result<(WebhookSource, String), sqlx::Error> {
             Err(sqlx::Error::RowNotFound)
         }
 
@@ -1944,11 +1905,11 @@ mod tests {
             Err(sqlx::Error::RowNotFound)
         }
 
-        async fn rotate_webhook_source_secret(
+        async fn rotate_webhook_source_secret_with_secret(
             &self,
             _workspace_id: Uuid,
             _source_id: Uuid,
-        ) -> Result<WebhookSource, sqlx::Error> {
+        ) -> Result<(WebhookSource, String), sqlx::Error> {
             Err(sqlx::Error::RowNotFound)
         }
     }
@@ -2138,11 +2099,12 @@ mod tests {
 
     #[async_trait]
     impl WebhookSourceRepository for TestWebhookSourceRepo {
-        async fn create_webhook_source(
+        async fn create_webhook_source_with_secret(
             &self,
             workspace_id: Uuid,
             name: &str,
-        ) -> Result<WebhookSource, sqlx::Error> {
+            _: bool,
+        ) -> Result<(WebhookSource, String), sqlx::Error> {
             let now = OffsetDateTime::now_utc();
             let source = WebhookSource {
                 id: Uuid::new_v4(),
@@ -2157,7 +2119,7 @@ mod tests {
                 updated_at: now,
             };
             self.sources.lock().unwrap().push(source.clone());
-            Ok(source)
+            Ok((source, "".to_string()))
         }
 
         async fn find_webhook_source_by_id(
@@ -2237,11 +2199,11 @@ mod tests {
             }
         }
 
-        async fn rotate_webhook_source_secret(
+        async fn rotate_webhook_source_secret_with_secret(
             &self,
             workspace_id: Uuid,
             source_id: Uuid,
-        ) -> Result<WebhookSource, sqlx::Error> {
+        ) -> Result<(WebhookSource, String), sqlx::Error> {
             let mut sources = self.sources.lock().unwrap();
             if let Some(source) = sources
                 .iter_mut()
@@ -2249,7 +2211,7 @@ mod tests {
             {
                 source.secret = format!("rotated-{}", Uuid::new_v4());
                 source.updated_at = OffsetDateTime::now_utc();
-                Ok(source.clone())
+                Ok((source.clone(), "".to_string()))
             } else {
                 Err(sqlx::Error::RowNotFound)
             }

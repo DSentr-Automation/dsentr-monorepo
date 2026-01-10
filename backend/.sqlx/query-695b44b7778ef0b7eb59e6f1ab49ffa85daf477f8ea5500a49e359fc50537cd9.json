@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            INSERT INTO webhook_sources (workspace_id, name, secret)\n            VALUES ($1, $2, $3)\n            RETURNING id,\n                      workspace_id,\n                      name,\n                      secret,\n                      require_hmac,\n                      replay_window_sec,\n                      last_seen_at,\n                      enabled,\n                      created_at,\n                      updated_at\n            ",
+  "query": "\n            INSERT INTO webhook_sources (workspace_id, name, secret, require_hmac)\n            VALUES ($1, $2, $3, $4)\n            RETURNING id,\n                      workspace_id,\n                      name,\n                      secret,\n                      require_hmac,\n                      replay_window_sec,\n                      last_seen_at,\n                      enabled,\n                      created_at,\n                      updated_at\n            ",
   "describe": {
     "columns": [
       {
@@ -58,7 +58,8 @@
       "Left": [
         "Uuid",
         "Text",
-        "Text"
+        "Text",
+        "Bool"
       ]
     },
     "nullable": [
@@ -74,5 +75,5 @@
       false
     ]
   },
-  "hash": "c078744923ce3fb446a20280e45d962e767a70ff3c4e863b670185febb21d9fe"
+  "hash": "695b44b7778ef0b7eb59e6f1ab49ffa85daf477f8ea5500a49e359fc50537cd9"
 }
