@@ -33,3 +33,7 @@
 - Executor test configs now set webhook ingress dedupe mode so Config stubs stay in sync.
 - Executor test configs no longer include `WEBHOOK_SECRET` after removing workflow-scoped webhook settings.
 - Executor tests now capture node ids outside async mocks to satisfy Rust lifetime requirements during upsert assertions.
+- Engine startup now builds an explicit action registry and executor dispatch resolves every node through registered actions.
+- Action registry exports are scoped to the crate so engine/worker share the registry without exposing internal node types.
+- Action registry construction now uses action manifests and centralized registrations for executors and validators.
+- Executor entrypoints are now crate-scoped to keep the action registry internal while still allowing the worker to dispatch runs.

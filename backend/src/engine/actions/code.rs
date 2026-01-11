@@ -4,8 +4,26 @@ use boa_engine::context::Context as JsContext;
 use boa_engine::Source;
 use serde_json::{json, Map, Value};
 
+use crate::engine::actions::registry::{
+    ActionExecutionSemantics, ActionManifest, ActionValidator,
+};
+use crate::engine::actions::validate_required_fields;
 use crate::engine::graph::Node;
 use crate::engine::templating::templ_str;
+
+pub(crate) const MANIFEST: ActionManifest = ActionManifest {
+    action_type: "code",
+    required_fields: &["params"],
+    execution_semantics: ActionExecutionSemantics::Standard,
+};
+
+pub(crate) struct CodeValidator;
+
+impl ActionValidator for CodeValidator {
+    fn validate(&self, node: &Node) -> Result<(), String> {
+        validate_required_fields(node, MANIFEST.required_fields)
+    }
+}
 
 pub(crate) async fn execute_code(
     node: &Node,

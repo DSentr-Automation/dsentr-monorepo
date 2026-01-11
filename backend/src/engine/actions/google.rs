@@ -1,6 +1,10 @@
 use std::collections::HashSet;
 use std::env;
 
+use crate::engine::actions::registry::{
+    ActionExecutionSemantics, ActionManifest, ActionValidator,
+};
+use crate::engine::actions::validate_required_fields;
 use crate::engine::graph::Node;
 use crate::engine::templating::templ_str;
 use crate::models::oauth_token::ConnectedOAuthProvider;
@@ -15,6 +19,20 @@ use tracing::warn;
 use uuid::Uuid;
 
 const DEFAULT_SHEETS_BASE: &str = "https://sheets.googleapis.com/v4/spreadsheets";
+
+pub(crate) const MANIFEST: ActionManifest = ActionManifest {
+    action_type: "sheets",
+    required_fields: &["params"],
+    execution_semantics: ActionExecutionSemantics::Standard,
+};
+
+pub(crate) struct SheetsValidator;
+
+impl ActionValidator for SheetsValidator {
+    fn validate(&self, node: &Node) -> Result<(), String> {
+        validate_required_fields(node, MANIFEST.required_fields)
+    }
+}
 
 pub(crate) async fn execute_sheets(
     node: &Node,

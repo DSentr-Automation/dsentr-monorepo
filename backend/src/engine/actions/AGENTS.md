@@ -48,3 +48,8 @@
 - Notion action helpers now use an `if let` object destructure in select-property mapping, and tests import OAuth token types from the db repository module.
 - Action test configs now set webhook ingress dedupe mode so Config stubs remain complete.
 - Action test configs no longer include `WEBHOOK_SECRET` after removing workflow-scoped webhook settings.
+- Added an action registry definition layer so executors register explicit action types and validate registrations at startup.
+- Scoped action registry types to crate visibility so internal graph nodes are not exposed in public interfaces.
+- Added per-action manifests (required fields + semantics) and centralized manifest-to-executor registration in the actions module.
+- Formatter validation now runs in the action validator (with config parsing), so execute_formatter assumes validated configs and registry resolution no longer carries required_fields.
+- Delay and formatter executors now live in their respective modules and implement ActionExecutor directly, keeping registry dispatch generic.

@@ -19,3 +19,4 @@
 - Listed the Asana OAuth callback URL and environment variables so credential provisioning stays consistent with the new integration.
 - Added the Notion OAuth callback URL and env var list so credential setup stays aligned with the integration config.
 - Removed the legacy workflow webhook secret runbook after deprecating workflow-scoped webhook tokens.
+- Added an action registry note covering manifests, execution semantics, and no-branching rules for engine dispatch.

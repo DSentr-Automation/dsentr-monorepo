@@ -1,15 +1,19 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
-use serde_json::{json, Map, Value};
+#[cfg(test)]
+use serde_json::json;
+use serde_json::{Map, Value};
 use thiserror::Error;
 use time::OffsetDateTime;
 use tokio::time::{sleep, timeout, Instant};
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
-use super::actions::delay::{compute_delay_plan, parse_delay_config, DelayOutcome};
+use super::actions::registry::{
+    ActionExecutionResult, ActionExecutionSemantics, ActionRegistry, ActionRuntimeContext,
+};
 use crate::models::workflow_run::WorkflowRun;
 use crate::models::workflow_run_event::NewWorkflowRunEvent;
 use crate::state::AppState;
@@ -19,7 +23,6 @@ use crate::utils::{
     workflow_connection_metadata,
 };
 
-use super::actions::{execute_action, execute_condition, execute_trigger};
 use super::graph::Graph;
 
 const PERSISTENCE_MAX_ATTEMPTS: usize = 3;
@@ -63,14 +66,15 @@ impl ExecutorError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RunCompletion {
+pub(crate) enum RunCompletion {
     Finished,
     Paused,
 }
 
-pub async fn execute_run(
+pub(crate) async fn execute_run(
     state: AppState,
     mut run: WorkflowRun,
+    registry: Arc<ActionRegistry>,
 ) -> Result<RunCompletion, ExecutorError> {
     let triggered_by = format!("worker:{}", state.worker_id.as_ref());
     if let Err(err_msg) = hydrate_run_secrets(&state, &mut run).await {
@@ -197,6 +201,7 @@ pub async fn execute_run(
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
 
+    let action_registry = registry.as_ref();
     let mut visited: HashSet<String> = HashSet::new();
     let resume_from_nodes = run
         .snapshot
@@ -388,73 +393,61 @@ pub async fn execute_run(
             "Executing workflow node"
         );
 
-        let execution: Result<NodeExecResult, String> = async {
-            match kind {
-                "delay" | "logicDelay" | "wait" => {
-                    let config_value = node.data.get("config").cloned().unwrap_or(Value::Null);
-                    let config = parse_delay_config(&config_value)
-                        .map_err(|err| format!("Invalid delay config: {err}"))?;
-                    let mut rng = rand::rng();
-                    let plan = compute_delay_plan(&config, Utc::now(), &mut rng)
-                        .map_err(|err| format!("Delay planning failed: {err}"))?;
+        let has_action_type = node
+            .data
+            .get("actionType")
+            .and_then(|v| v.as_str())
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
 
-                    let outputs = match &plan {
-                        DelayOutcome::NoWait { base_delay } => json!({
-                            "resumeAt": Value::Null,
-                            "delaySeconds": base_delay.as_secs(),
-                            "jitterAppliedSeconds": 0,
-                            "mode": "duration"
-                        }),
-                        DelayOutcome::Wait(comp) => json!({
-                            "resumeAt": comp.resume_at.to_rfc3339(),
-                            "delaySeconds": comp.total_delay.as_secs(),
-                            "baseDelaySeconds": comp.base_delay.as_secs(),
-                            "jitterAppliedSeconds": comp.jitter_applied.as_secs(),
-                            "mode": "duration_or_absolute"
-                        }),
-                    };
+        let execution: Result<(ActionExecutionSemantics, ActionExecutionResult), (String, bool)> =
+            async {
+                let action = action_registry.resolve(node).map_err(|err| (err, true))?;
+                action
+                    .validator
+                    .validate(node)
+                    .map_err(|err| (err, false))?;
 
-                    let resolution = resolve_next_nodes(&graph, &node_id, kind, &outputs, None);
+                let runtime = ActionRuntimeContext {
+                    node,
+                    context: &context_value,
+                    allowed_hosts: &allowed_hosts,
+                    disallowed_hosts: &disallowed_hosts,
+                    default_deny,
+                    is_prod,
+                    state: &state,
+                    run: &run,
+                };
 
-                    let outcome = match plan {
-                        DelayOutcome::Wait(comp) => NodeExecResult::Pause {
-                            outputs,
-                            resume_at: comp.resume_at,
-                            next_nodes: resolution.nodes,
-                        },
-                        DelayOutcome::NoWait { .. } => NodeExecResult::Normal((outputs, None)),
-                    };
-                    Ok(outcome)
+                let result = action
+                    .executor
+                    .execute(runtime)
+                    .await
+                    .map_err(|err| (err, false))?;
+                if matches!(result, ActionExecutionResult::Pause { .. })
+                    && action.semantics != ActionExecutionSemantics::Resumable
+                {
+                    return Err((
+                        format!(
+                            "Action `{}` returned a pause but is not resumable",
+                            action.action_type
+                        ),
+                        true,
+                    ));
                 }
-                "formatter" | "logicformatter" | "transform" => Ok(NodeExecResult::Normal(
-                    super::actions::formatter::execute_formatter(node, &context_value)?,
-                )),
-                "trigger" => Ok(NodeExecResult::Normal(
-                    execute_trigger(node, &context_value).await?,
-                )),
-                "condition" => Ok(NodeExecResult::Normal(
-                    execute_condition(node, &context_value).await?,
-                )),
-                k if k == "action" || k.starts_with("action") => Ok(NodeExecResult::Normal(
-                    execute_action(
-                        node,
-                        &context_value,
-                        &allowed_hosts,
-                        &disallowed_hosts,
-                        default_deny,
-                        is_prod,
-                        &state,
-                        &run,
-                    )
-                    .await?,
-                )),
-                _ => Ok(NodeExecResult::Normal((json!({"skipped": true}), None))),
+
+                Ok((action.semantics, result))
             }
-        }
-        .await;
+            .await;
 
         match execution {
-            Ok(NodeExecResult::Normal((outputs, selected_next))) => {
+            Ok((
+                semantics,
+                ActionExecutionResult::Immediate {
+                    outputs,
+                    selected_next,
+                },
+            )) => {
                 if let Some(nr) = running {
                     let _ = state
                         .workflow_repo
@@ -483,7 +476,7 @@ pub async fn execute_run(
                 }
 
                 let resolution =
-                    resolve_next_nodes(&graph, &node_id, kind, &outputs, selected_next);
+                    resolve_next_nodes(&graph, &node_id, semantics, &outputs, selected_next);
                 if let Some(invalid) = resolution.invalid_selected {
                     warn!(
                         %run.id,
@@ -497,11 +490,7 @@ pub async fn execute_run(
                     stack.push(next);
                 }
             }
-            Ok(NodeExecResult::Pause {
-                outputs,
-                resume_at,
-                next_nodes,
-            }) => {
+            Ok((semantics, ActionExecutionResult::Pause { outputs, resume_at })) => {
                 if let Some(nr) = running {
                     let _ = state
                         .workflow_repo
@@ -524,6 +513,8 @@ pub async fn execute_run(
                     context.insert(alias, outputs.clone());
                 }
 
+                let resolution = resolve_next_nodes(&graph, &node_id, semantics, &outputs, None);
+                let next_nodes = resolution.nodes;
                 let mut snapshot = run.snapshot.clone();
                 if let Value::Object(ref mut map) = snapshot {
                     map.insert(
@@ -560,7 +551,7 @@ pub async fn execute_run(
                 pause_run_with_retry(&state, run.id, snapshot, resume_at_offset).await?;
                 return Ok(RunCompletion::Paused);
             }
-            Err(err_msg) => {
+            Err((err_msg, force_fail)) => {
                 let mut next_nodes: Vec<String> = vec![];
                 if let Some(nr) = running {
                     let _ = state
@@ -583,7 +574,7 @@ pub async fn execute_run(
                     .get("stopOnError")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(true);
-                if stop_on_error || kind != "action" {
+                if force_fail || stop_on_error || !has_action_type {
                     if let Err(err) = insert_dead_letter_with_retry(&state, &run, &err_msg).await {
                         // Attempt to still mark the run failed before bubbling up the error.
                         let _ =
@@ -647,26 +638,17 @@ struct NextResolution {
     invalid_selected: Option<String>,
 }
 
-enum NodeExecResult {
-    Normal((Value, Option<String>)),
-    Pause {
-        outputs: Value,
-        resume_at: DateTime<Utc>,
-        next_nodes: Vec<String>,
-    },
-}
-
 fn resolve_next_nodes(
     graph: &Graph,
     node_id: &str,
-    kind: &str,
+    semantics: ActionExecutionSemantics,
     outputs: &Value,
     selected_next: Option<String>,
 ) -> NextResolution {
     let mut nodes: Vec<String> = vec![];
 
     let push_outgoing = |targets: &mut Vec<String>| {
-        if kind == "condition" {
+        if semantics == ActionExecutionSemantics::Conditional {
             let desired_handle = outputs
                 .get("result")
                 .and_then(|v| v.as_bool())
@@ -1007,6 +989,8 @@ mod tests {
     use crate::db::mock_stripe_event_log_repository::MockStripeEventLogRepository;
     use crate::db::workflow_repository::{MockWorkflowRepository, WorkflowRepository};
     use crate::db::workspace_connection_repository::NoopWorkspaceConnectionRepository;
+    use crate::engine::actions::registry::ActionExecutionSemantics;
+    use crate::engine::build_action_registry;
     use crate::models::workflow_run::WorkflowRun;
     use crate::models::workflow_run_event::WorkflowRunEvent;
     use crate::runaway_protection::{enforce_runaway_protection, RunawayProtectionError};
@@ -1157,8 +1141,13 @@ mod tests {
         .expect("graph should build");
 
         let outputs = json!({});
-        let resolution =
-            resolve_next_nodes(&graph, "n1", "action", &outputs, Some("n3".to_string()));
+        let resolution = resolve_next_nodes(
+            &graph,
+            "n1",
+            ActionExecutionSemantics::Standard,
+            &outputs,
+            Some("n3".to_string()),
+        );
 
         assert_eq!(resolution.nodes, vec!["n3"]);
         assert!(resolution.invalid_selected.is_none());
@@ -1183,7 +1172,7 @@ mod tests {
         let resolution = resolve_next_nodes(
             &graph,
             "cond-1",
-            "condition",
+            ActionExecutionSemantics::Conditional,
             &outputs,
             Some("missing".into()),
         );
@@ -1252,8 +1241,9 @@ mod tests {
             .returning(|_event| Box::pin(async { Err(sqlx::Error::RowNotFound) }));
 
         let state = build_state(repo);
+        let registry = Arc::new(build_action_registry());
 
-        let err = execute_run(state, run)
+        let err = execute_run(state, run, registry)
             .await
             .expect_err("should bubble error");
         assert_eq!(err.operation(), "record_run_event");
@@ -1294,8 +1284,9 @@ mod tests {
             .returning(|_, _, _| Box::pin(async { Err(sqlx::Error::RowNotFound) }));
 
         let state = build_state(repo);
+        let registry = Arc::new(build_action_registry());
 
-        let err = execute_run(state, run)
+        let err = execute_run(state, run, registry)
             .await
             .expect_err("should bubble error");
         assert_eq!(err.operation(), "complete_workflow_run");
@@ -1338,8 +1329,9 @@ mod tests {
             .returning(|_, _, _| Box::pin(async { Ok(()) }));
 
         let state = build_state(repo);
+        let registry = Arc::new(build_action_registry());
 
-        let err = execute_run(state, run)
+        let err = execute_run(state, run, registry)
             .await
             .expect_err("should bubble error");
         assert_eq!(err.operation(), "insert_dead_letter");
@@ -1379,8 +1371,9 @@ mod tests {
             .returning(|_, _, _| Box::pin(async { Ok(()) }));
 
         let state = build_state(repo);
+        let registry = Arc::new(build_action_registry());
 
-        execute_run(state, run)
+        execute_run(state, run, registry)
             .await
             .expect("success path should still complete");
     }
@@ -1448,8 +1441,11 @@ mod tests {
             .returning(|_, _, _| Box::pin(async { Ok(()) }));
 
         let state = build_state(repo);
+        let registry = Arc::new(build_action_registry());
 
-        execute_run(state, run).await.expect("run should complete");
+        execute_run(state, run, registry)
+            .await
+            .expect("run should complete");
 
         let recorded = seen_nodes.lock().expect("seen nodes lock poisoned").clone();
         assert_eq!(recorded.len(), 2);
@@ -1532,8 +1528,9 @@ mod tests {
         repo.expect_complete_workflow_run().times(0);
 
         let state = build_state(repo);
+        let registry = Arc::new(build_action_registry());
 
-        let result = execute_run(state, run)
+        let result = execute_run(state, run, registry)
             .await
             .expect("delay node should pause for resume");
         assert_eq!(result, RunCompletion::Paused);
@@ -1584,9 +1581,10 @@ mod tests {
             .returning(|_, _, _| Box::pin(async { Ok(()) }));
 
         let state = build_state(repo);
+        let registry = Arc::new(build_action_registry());
 
         // Should complete without surfacing an executor error.
-        execute_run(state, run)
+        execute_run(state, run, registry)
             .await
             .expect("executor should gracefully handle missing connection FK");
     }

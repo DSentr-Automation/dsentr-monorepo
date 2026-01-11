@@ -1,14 +1,74 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
+use async_trait::async_trait;
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::engine::actions::{lookup_path, parse_flexible_value};
+use crate::engine::actions::registry::{
+    ActionExecutionResult, ActionExecutionSemantics, ActionExecutor, ActionManifest,
+    ActionRuntimeContext, ActionValidator,
+};
+use crate::engine::actions::{lookup_path, parse_flexible_value, validate_required_fields};
 use crate::engine::graph::Node;
 use crate::engine::templating::templ_str;
+
+pub(crate) const MANIFEST: ActionManifest = ActionManifest {
+    action_type: "formatter",
+    required_fields: &["config"],
+    execution_semantics: ActionExecutionSemantics::Standard,
+};
+
+pub(crate) struct FormatterValidator;
+
+impl ActionValidator for FormatterValidator {
+    fn validate(&self, node: &Node) -> Result<(), String> {
+        validate_required_fields(node, MANIFEST.required_fields)?;
+        let config_value = node.data.get("config").cloned().unwrap_or(Value::Null);
+        let config = parse_formatter_config(&config_value)?;
+        validate_formatter_config(&config)
+    }
+}
+
+pub(crate) struct FormatterExecutor;
+
+#[async_trait]
+impl ActionExecutor for FormatterExecutor {
+    async fn execute(
+        &self,
+        ctx: ActionRuntimeContext<'_>,
+    ) -> Result<ActionExecutionResult, String> {
+        let (outputs, selected_next) = execute_formatter(ctx.node, ctx.context)?;
+        Ok(ActionExecutionResult::Immediate {
+            outputs,
+            selected_next,
+        })
+    }
+}
+
+fn parse_formatter_config(value: &Value) -> Result<FormatterConfig, String> {
+    serde_json::from_value(value.clone())
+        .map_err(|_| "Invalid formatter configuration".to_string())
+}
+
+fn validate_formatter_config(config: &FormatterConfig) -> Result<(), String> {
+    let operation = config.operation.trim();
+    if operation.is_empty() {
+        return Err("Formatter operation is required.".to_string());
+    }
+
+    let output_key = config.output_key.trim();
+    if output_key.is_empty() {
+        return Err("Output key is required.".to_string());
+    }
+    if !is_valid_output_key(output_key) {
+        return Err("Output key must start with a letter/underscore and contain only letters, numbers, or underscores.".to_string());
+    }
+
+    Ok(())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FormatterConfig {
@@ -268,24 +328,16 @@ pub(crate) fn execute_formatter(
     context: &Value,
 ) -> Result<(Value, Option<String>), String> {
     let config_value = node.data.get("config").cloned().unwrap_or(Value::Null);
-    let config: FormatterConfig = serde_json::from_value(config_value)
-        .map_err(|_| "Invalid formatter configuration".to_string())?;
+    let config = parse_formatter_config(&config_value)?;
+    let FormatterConfig {
+        operation,
+        input,
+        fields,
+        output_key,
+    } = config;
 
-    let operation = config.operation.trim();
-    if operation.is_empty() {
-        return Err("Formatter operation is required.".to_string());
-    }
-
-    let output_key = config.output_key.trim();
-    if output_key.is_empty() {
-        return Err("Output key is required.".to_string());
-    }
-    if !is_valid_output_key(output_key) {
-        return Err("Output key must start with a letter/underscore and contain only letters, numbers, or underscores.".to_string());
-    }
-
-    let input_value = templ_str(&config.input, context);
-    let fields = config.fields;
+    let operation = operation.trim();
+    let input_value = templ_str(&input, context);
 
     let result = match operation {
         "string.trim" => Value::String(input_value.trim().to_string()),
@@ -539,6 +591,7 @@ pub(crate) fn execute_formatter(
         }
     };
 
+    let output_key = output_key.trim();
     let mut map = Map::new();
     map.insert(output_key.to_string(), result);
     Ok((Value::Object(map), None))

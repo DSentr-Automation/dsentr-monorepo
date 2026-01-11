@@ -7,11 +7,29 @@ use reqwest::Url;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use crate::engine::actions::registry::{
+    ActionExecutionSemantics, ActionManifest, ActionValidator,
+};
+use crate::engine::actions::validate_required_fields;
 use crate::engine::graph::Node;
 use crate::engine::templating::templ_str;
 use crate::services::smtp_mailer::{SmtpConfig, TlsMode};
 use crate::state::AppState;
 use tokio::time::timeout;
+
+pub(crate) const MANIFEST: ActionManifest = ActionManifest {
+    action_type: "email",
+    required_fields: &["params"],
+    execution_semantics: ActionExecutionSemantics::Standard,
+};
+
+pub(crate) struct EmailValidator;
+
+impl ActionValidator for EmailValidator {
+    fn validate(&self, node: &Node) -> Result<(), String> {
+        validate_required_fields(node, MANIFEST.required_fields)
+    }
+}
 
 fn is_valid_email_address(value: &str) -> bool {
     let trimmed = value.trim();

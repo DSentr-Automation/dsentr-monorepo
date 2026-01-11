@@ -1,6 +1,10 @@
 use serde_json::{json, Map, Value};
 use uuid::Uuid;
 
+use crate::engine::actions::registry::{
+    ActionExecutionSemantics, ActionManifest, ActionValidator,
+};
+use crate::engine::actions::validate_required_fields;
 use crate::engine::graph::Node;
 use crate::engine::templating::templ_str;
 use crate::models::oauth_token::ConnectedOAuthProvider;
@@ -12,6 +16,20 @@ use crate::state::AppState;
 use super::{ensure_run_membership, ensure_workspace_plan};
 
 const ASANA_BASE_URL: &str = "https://app.asana.com/api/1.0";
+
+pub(crate) const MANIFEST: ActionManifest = ActionManifest {
+    action_type: "asana",
+    required_fields: &["params"],
+    execution_semantics: ActionExecutionSemantics::Standard,
+};
+
+pub(crate) struct AsanaValidator;
+
+impl ActionValidator for AsanaValidator {
+    fn validate(&self, node: &Node) -> Result<(), String> {
+        validate_required_fields(node, MANIFEST.required_fields)
+    }
+}
 
 fn read_required(
     params: &Value,

@@ -30,3 +30,5 @@
 - Notion polling state updates now use `is_none_or` and a single shared state update branch to satisfy clippy warnings without changing behavior.
 - Worker cleanup now purges webhook ingress dedupe rows daily using replay-window-aware retention.
 - Worker test fixtures now align with the Workflow model after removing legacy webhook fields and `WEBHOOK_SECRET` config stubs.
+- Worker execution now receives the engine action registry so run dispatch always uses explicit action registrations.
+- Worker startup now builds the action registry internally so the public worker entrypoint no longer exposes registry types.
