@@ -1387,6 +1387,7 @@ mod tests {
             webhook_ingress_dedupe_mode: crate::config::WebhookIngressDedupeMode::Off,
             webhook_verification_body_fields: Vec::new(),
             webhook_verification_header_fields: Vec::new(),
+            webhook_event_type_fields: vec!["event_type".to_string(), "type".to_string()],
         });
 
         AppState {
@@ -1634,6 +1635,7 @@ mod tests {
             webhook_ingress_dedupe_mode: crate::config::WebhookIngressDedupeMode::Off,
             webhook_verification_body_fields: Vec::new(),
             webhook_verification_header_fields: Vec::new(),
+            webhook_event_type_fields: vec!["event_type".to_string(), "type".to_string()],
         });
 
         let state = AppState {
@@ -1839,6 +1841,7 @@ mod tests {
             webhook_ingress_dedupe_mode: crate::config::WebhookIngressDedupeMode::Off,
             webhook_verification_body_fields: Vec::new(),
             webhook_verification_header_fields: Vec::new(),
+            webhook_event_type_fields: vec!["event_type".to_string(), "type".to_string()],
         });
 
         let state = AppState {
@@ -2050,6 +2053,7 @@ mod tests {
             webhook_ingress_dedupe_mode: crate::config::WebhookIngressDedupeMode::Off,
             webhook_verification_body_fields: Vec::new(),
             webhook_verification_header_fields: Vec::new(),
+            webhook_event_type_fields: vec!["event_type".to_string(), "type".to_string()],
         });
 
         let state = AppState {
@@ -2222,6 +2226,7 @@ mod tests {
             webhook_ingress_dedupe_mode: crate::config::WebhookIngressDedupeMode::Off,
             webhook_verification_body_fields: Vec::new(),
             webhook_verification_header_fields: Vec::new(),
+            webhook_event_type_fields: vec!["event_type".to_string(), "type".to_string()],
         });
 
         let state = AppState {
@@ -2383,6 +2388,7 @@ mod tests {
             webhook_ingress_dedupe_mode: crate::config::WebhookIngressDedupeMode::Off,
             webhook_verification_body_fields: Vec::new(),
             webhook_verification_header_fields: Vec::new(),
+            webhook_event_type_fields: vec!["event_type".to_string(), "type".to_string()],
         });
 
         let state = AppState {

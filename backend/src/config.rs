@@ -71,6 +71,7 @@ pub struct Config {
     pub webhook_ingress_dedupe_mode: WebhookIngressDedupeMode,
     pub webhook_verification_body_fields: Vec<String>,
     pub webhook_verification_header_fields: Vec<(String, Option<String>)>,
+    pub webhook_event_type_fields: Vec<String>,
 }
 
 impl Config {
@@ -199,6 +200,8 @@ impl Config {
             parse_webhook_verification_body_fields("WEBHOOK_VERIFICATION_BODY_FIELDS")?;
         let webhook_verification_header_fields =
             parse_webhook_verification_header_fields("WEBHOOK_VERIFICATION_HEADER_FIELDS")?;
+        let webhook_event_type_fields =
+            parse_webhook_event_type_fields("WEBHOOK_EVENT_TYPE_FIELDS")?;
 
         Ok(Config {
             database_url,
@@ -223,6 +226,7 @@ impl Config {
             webhook_ingress_dedupe_mode,
             webhook_verification_body_fields,
             webhook_verification_header_fields,
+            webhook_event_type_fields,
         })
     }
 }
@@ -314,6 +318,24 @@ fn parse_webhook_verification_header_fields(
                         (token.to_string(), None)
                     }
                 })
+                .collect())
+        }
+        Err(_) => Ok(Vec::new()),
+    }
+}
+
+fn parse_webhook_event_type_fields(name: &'static str) -> Result<Vec<String>, ConfigError> {
+    match env::var(name) {
+        Ok(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Ok(Vec::new());
+            }
+
+            Ok(trimmed
+                .split(',')
+                .map(|token| token.trim().to_string())
+                .filter(|token| !token.is_empty())
                 .collect())
         }
         Err(_) => Ok(Vec::new()),

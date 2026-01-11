@@ -173,9 +173,9 @@ fn validate_event_type(event_type: &str) -> Result<(), Response> {
     }
     if event_type.split('.').any(|segment| {
         segment.is_empty()
-            || !segment.chars().all(|c| {
-                c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-'
-            })
+            || !segment
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
     }) {
         return Err(JsonResponse::bad_request(
             "event_type must be dot-separated lowercase letters, digits, underscores, or dashes",
@@ -1381,6 +1381,7 @@ pub async fn webhook_ingress(
         body.as_ref(), // raw_body for HMAC validation
         &app_state.config.webhook_verification_body_fields,
         &app_state.config.webhook_verification_header_fields,
+        &app_state.config.webhook_event_type_fields,
         OffsetDateTime::now_utc(),
     )
     .await
@@ -1401,6 +1402,7 @@ async fn handle_webhook_ingress(
     raw_body: &[u8],
     verification_body_fields: &[String],
     verification_header_fields: &[(String, Option<String>)],
+    webhook_event_type_fields: &[String],
     now: OffsetDateTime,
 ) -> Response {
     let span = tracing::info_span!(
@@ -1485,12 +1487,30 @@ async fn handle_webhook_ingress(
         }
     }
 
-    let event_type = match payload
-        .get(EVENT_TYPE_FIELD)
-        .and_then(|value| value.as_str())
+    let mut resolved_field: Option<&str> = None;
+
+    // 1. Resolve event type from configured fields
+    let event_type = webhook_event_type_fields
+        .iter()
+        .find_map(|field| {
+            payload.get(field).and_then(|value| {
+                value.as_str().inspect(|_| {
+                    resolved_field = Some(field.as_str());
+                })
+            })
+        })
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
-    {
+        // 2. Backward-compatible fallback
+        .or_else(|| {
+            payload
+                .get(EVENT_TYPE_FIELD)
+                .and_then(|value| value.as_str())
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+        });
+
+    let event_type = match event_type {
         Some(value) => value,
         None => {
             warn!(
@@ -1500,6 +1520,14 @@ async fn handle_webhook_ingress(
             return JsonResponse::bad_request("Missing event_type").into_response();
         }
     };
+
+    // 3. Log resolution source
+    info!(
+        source_id = %source.id,
+        resolved_from = resolved_field.unwrap_or(EVENT_TYPE_FIELD),
+        %event_type,
+        "webhook event resolved"
+    );
 
     Span::current().record("event_type", tracing::field::display(event_type));
     info!(
@@ -1950,6 +1978,7 @@ mod tests {
             body,
             &[], // verification_body_fields
             &[], // verification_header_fields
+            &[], // webhook_event_type_fields
             now,
         )
         .await
