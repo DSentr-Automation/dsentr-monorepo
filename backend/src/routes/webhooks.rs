@@ -1358,6 +1358,15 @@ pub async fn webhook_ingress(
         pool: (*app_state.db_pool).clone(),
     };
 
+    // Parse JSON exactly once
+    let payload: Value = match serde_json::from_slice(body.as_ref()) {
+        Ok(value) => value,
+        Err(err) => {
+            warn!(?err, "invalid webhook payload JSON");
+            return JsonResponse::bad_request("Invalid JSON payload").into_response();
+        }
+    };
+
     handle_webhook_ingress(
         &dedupe_repo,
         &delivery_repo,
@@ -1368,7 +1377,10 @@ pub async fn webhook_ingress(
         &app_state.config.api_secrets_encryption_key,
         source_id,
         &headers,
-        body.as_ref(),
+        &payload,
+        body.as_ref(), // raw_body for HMAC validation
+        &app_state.config.webhook_verification_body_fields,
+        &app_state.config.webhook_verification_header_fields,
         OffsetDateTime::now_utc(),
     )
     .await
@@ -1385,7 +1397,10 @@ async fn handle_webhook_ingress(
     encryption_key: &[u8],
     source_id: Uuid,
     headers: &HeaderMap,
-    body: &[u8],
+    payload: &Value,
+    raw_body: &[u8],
+    verification_body_fields: &[String],
+    verification_header_fields: &[(String, Option<String>)],
     now: OffsetDateTime,
 ) -> Response {
     let span = tracing::info_span!(
@@ -1422,13 +1437,53 @@ async fn handle_webhook_ingress(
         "webhook source resolved"
     );
 
-    let payload: Value = match serde_json::from_slice(body) {
-        Ok(value) => value,
-        Err(err) => {
-            warn!(?err, source_id = %source.id, "invalid webhook payload JSON");
-            return JsonResponse::bad_request("Invalid JSON payload").into_response();
+    // Verification check runs immediately after JSON parsing, before:
+    // - event_type validation
+    // - HMAC validation
+    // - replay window checks
+    // - last_seen_at updates
+    // - dedupe
+    // - subscription lookup
+    let verification_outcome = crate::routes::webhook_verification::is_webhook_verification_request(
+        verification_body_fields,
+        verification_header_fields,
+        headers,
+        payload,
+    );
+
+    match verification_outcome {
+        crate::routes::webhook_verification::VerificationOutcome::Single(match_detail) => {
+            // Check if payload also contains event_type (malformed)
+            if payload.get(EVENT_TYPE_FIELD).is_some() {
+                return JsonResponse::bad_request("malformed webhook verification payload")
+                    .into_response();
+            }
+
+            // Log verification details
+            info!(
+                match_type = crate::routes::webhook_verification::match_type_string(&match_detail),
+                indicator_source =
+                    crate::routes::webhook_verification::indicator_source(&match_detail),
+                indicator_key = crate::routes::webhook_verification::indicator_key(&match_detail),
+                indicator_value = crate::routes::webhook_verification::indicator_value(
+                    &match_detail,
+                    payload,
+                    headers
+                ),
+                "webhook verification request detected"
+            );
+
+            // Return 200 with empty JSON body, no state mutations
+            return (StatusCode::OK, Json(json!({}))).into_response();
         }
-    };
+        crate::routes::webhook_verification::VerificationOutcome::Ambiguous(_matches) => {
+            return JsonResponse::bad_request("ambiguous webhook verification payload")
+                .into_response();
+        }
+        crate::routes::webhook_verification::VerificationOutcome::None => {
+            // Continue with normal webhook processing
+        }
+    }
 
     let event_type = match payload
         .get(EVENT_TYPE_FIELD)
@@ -1449,7 +1504,7 @@ async fn handle_webhook_ingress(
     Span::current().record("event_type", tracing::field::display(event_type));
 
     if source.require_hmac {
-        match validate_webhook_signature(encryption_key, &source, headers, body, now) {
+        match validate_webhook_signature(encryption_key, &source, headers, raw_body, now) {
             Ok(()) => {}
             Err(WebhookSignatureError::DecryptFailed(err)) => {
                 error!(?err, source_id = %source.id, "failed to decrypt webhook secret");
@@ -1493,7 +1548,7 @@ async fn handle_webhook_ingress(
     let mut dedupe_context: Option<DedupeKeyContext> = None;
 
     if !matches!(dedupe_mode, WebhookIngressDedupeMode::Off) {
-        match build_dedupe_key_context(&source, event_type, headers, body) {
+        match build_dedupe_key_context(&source, event_type, headers, raw_body) {
             Ok(context) => {
                 Span::current().record(
                     "payload_hash_prefix",
@@ -1852,6 +1907,41 @@ mod tests {
     struct StubWebhookSourceRepo {
         source: Option<WebhookSource>,
         last_seen: Mutex<Option<OffsetDateTime>>,
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn invoke_handle_webhook_ingress_with_payload(
+        dedupe_repo: &dyn WebhookIngressDedupeRepository,
+        delivery_repo: &dyn WebhookDeliveryRepository,
+        source_repo: &dyn WebhookSourceRepository,
+        subscription_repo: &dyn WebhookSubscriptionRepository,
+        workflow_repo: &dyn WorkflowRepository,
+        dedupe_mode: WebhookIngressDedupeMode,
+        encryption_key: &[u8],
+        source_id: Uuid,
+        headers: &HeaderMap,
+        body: &[u8],
+        now: OffsetDateTime,
+    ) -> Response {
+        let payload: Value = serde_json::from_slice(body).expect("valid JSON payload");
+
+        handle_webhook_ingress(
+            dedupe_repo,
+            delivery_repo,
+            source_repo,
+            subscription_repo,
+            workflow_repo,
+            dedupe_mode,
+            encryption_key,
+            source_id,
+            headers,
+            &payload,
+            body,
+            &[], // verification_body_fields
+            &[], // verification_header_fields
+            now,
+        )
+        .await
     }
 
     #[async_trait]
@@ -2893,7 +2983,7 @@ mod tests {
         let dedupe_repo = StubWebhookIngressDedupeRepo::default();
         let delivery_repo = StubWebhookDeliveryRepo::default();
 
-        let response = handle_webhook_ingress(
+        let response = invoke_handle_webhook_ingress_with_payload(
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -2928,7 +3018,7 @@ mod tests {
         let dedupe_repo = StubWebhookIngressDedupeRepo::default();
         let delivery_repo = StubWebhookDeliveryRepo::default();
 
-        let response = handle_webhook_ingress(
+        let response = invoke_handle_webhook_ingress_with_payload(
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -2966,7 +3056,7 @@ mod tests {
         headers.insert(TIMESTAMP_HEADER, "1700000000".parse().unwrap());
         headers.insert(SIGNATURE_HEADER, "v1=deadbeef".parse().unwrap());
 
-        let response = handle_webhook_ingress(
+        let response = invoke_handle_webhook_ingress_with_payload(
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -3011,7 +3101,7 @@ mod tests {
             format!("v1={}", signature).parse().unwrap(),
         );
 
-        let response = handle_webhook_ingress(
+        let response = invoke_handle_webhook_ingress_with_payload(
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -3115,7 +3205,7 @@ mod tests {
 
         let dedupe_repo = StubWebhookIngressDedupeRepo::default();
         let delivery_repo = StubWebhookDeliveryRepo::default();
-        let response = handle_webhook_ingress(
+        let response = invoke_handle_webhook_ingress_with_payload(
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -3157,7 +3247,7 @@ mod tests {
 
         let dedupe_repo = StubWebhookIngressDedupeRepo::default();
         let delivery_repo = StubWebhookDeliveryRepo::default();
-        let response = handle_webhook_ingress(
+        let response = invoke_handle_webhook_ingress_with_payload(
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -3198,7 +3288,7 @@ mod tests {
         let delivery_repo = StubWebhookDeliveryRepo::default();
         let now = OffsetDateTime::from_unix_timestamp(1_700_000_020).unwrap();
 
-        let response = handle_webhook_ingress(
+        let response = invoke_handle_webhook_ingress_with_payload(
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -3296,7 +3386,7 @@ mod tests {
         let delivery_repo = StubWebhookDeliveryRepo::new(true, false);
         let now = OffsetDateTime::from_unix_timestamp(1_700_000_030).unwrap();
 
-        let response = handle_webhook_ingress(
+        let response = invoke_handle_webhook_ingress_with_payload(
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -3423,7 +3513,7 @@ mod tests {
 
         let dedupe_repo = StubWebhookIngressDedupeRepo::default();
         let delivery_repo = StubWebhookDeliveryRepo::default();
-        let response = handle_webhook_ingress(
+        let response = invoke_handle_webhook_ingress_with_payload(
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -3545,7 +3635,7 @@ mod tests {
 
         let dedupe_repo = StubWebhookIngressDedupeRepo::default();
         let delivery_repo = StubWebhookDeliveryRepo::default();
-        let response = handle_webhook_ingress(
+        let response = invoke_handle_webhook_ingress_with_payload(
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -3636,7 +3726,7 @@ mod tests {
         let body = br#"{"event_type":"invoice.created","amount":1200}"#;
         let now = OffsetDateTime::from_unix_timestamp(1_700_000_010).unwrap();
 
-        let response = handle_webhook_ingress(
+        let response = invoke_handle_webhook_ingress_with_payload(
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -3652,7 +3742,7 @@ mod tests {
         .await;
         assert_eq!(response.status(), StatusCode::ACCEPTED);
 
-        let response = handle_webhook_ingress(
+        let response = invoke_handle_webhook_ingress_with_payload(
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -3741,7 +3831,7 @@ mod tests {
         let body = br#"{"event_type":"invoice.created","amount":1200}"#;
         let now = OffsetDateTime::from_unix_timestamp(1_700_000_010).unwrap();
 
-        let response = handle_webhook_ingress(
+        let response = invoke_handle_webhook_ingress_with_payload(
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -3757,7 +3847,7 @@ mod tests {
         .await;
         assert_eq!(response.status(), StatusCode::ACCEPTED);
 
-        let response = handle_webhook_ingress(
+        let response = invoke_handle_webhook_ingress_with_payload(
             &dedupe_repo,
             &delivery_repo,
             &repo,

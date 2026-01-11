@@ -69,6 +69,8 @@ pub struct Config {
     pub workspace_monthly_run_limit: i64,
     pub runaway_limit_5min: i64,
     pub webhook_ingress_dedupe_mode: WebhookIngressDedupeMode,
+    pub webhook_verification_body_fields: Vec<String>,
+    pub webhook_verification_header_fields: Vec<(String, Option<String>)>,
 }
 
 impl Config {
@@ -193,6 +195,10 @@ impl Config {
         let runaway_limit_5min = parse_positive_env_i64("RUNAWAY_LIMIT_5MIN", RUNAWAY_LIMIT_5MIN)?;
         let webhook_ingress_dedupe_mode =
             parse_webhook_ingress_dedupe_mode("WEBHOOK_INGRESS_DEDUPE_MODE")?;
+        let webhook_verification_body_fields =
+            parse_webhook_verification_body_fields("WEBHOOK_VERIFICATION_BODY_FIELDS")?;
+        let webhook_verification_header_fields =
+            parse_webhook_verification_header_fields("WEBHOOK_VERIFICATION_HEADER_FIELDS")?;
 
         Ok(Config {
             database_url,
@@ -215,6 +221,8 @@ impl Config {
             workspace_monthly_run_limit,
             runaway_limit_5min,
             webhook_ingress_dedupe_mode,
+            webhook_verification_body_fields,
+            webhook_verification_header_fields,
         })
     }
 }
@@ -266,6 +274,49 @@ fn parse_webhook_ingress_dedupe_mode(
             }
         }
         Err(_) => Ok(WebhookIngressDedupeMode::Off),
+    }
+}
+
+fn parse_webhook_verification_body_fields(name: &'static str) -> Result<Vec<String>, ConfigError> {
+    match env::var(name) {
+        Ok(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Ok(Vec::new());
+            }
+            Ok(trimmed
+                .split(',')
+                .map(|token| token.trim().to_string())
+                .filter(|token| !token.is_empty())
+                .collect())
+        }
+        Err(_) => Ok(Vec::new()),
+    }
+}
+
+fn parse_webhook_verification_header_fields(
+    name: &'static str,
+) -> Result<Vec<(String, Option<String>)>, ConfigError> {
+    match env::var(name) {
+        Ok(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Ok(Vec::new());
+            }
+            Ok(trimmed
+                .split(',')
+                .map(|token| token.trim())
+                .filter(|token| !token.is_empty())
+                .map(|token| {
+                    if let Some((header, value)) = token.split_once(':') {
+                        (header.trim().to_string(), Some(value.trim().to_string()))
+                    } else {
+                        (token.to_string(), None)
+                    }
+                })
+                .collect())
+        }
+        Err(_) => Ok(Vec::new()),
     }
 }
 

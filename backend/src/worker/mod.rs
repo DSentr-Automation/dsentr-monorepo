@@ -1385,6 +1385,8 @@ mod tests {
             workspace_monthly_run_limit: DEFAULT_WORKSPACE_MONTHLY_RUN_LIMIT,
             runaway_limit_5min: RUNAWAY_LIMIT_5MIN,
             webhook_ingress_dedupe_mode: crate::config::WebhookIngressDedupeMode::Off,
+            webhook_verification_body_fields: Vec::new(),
+            webhook_verification_header_fields: Vec::new(),
         });
 
         AppState {
@@ -1630,6 +1632,8 @@ mod tests {
             workspace_monthly_run_limit: DEFAULT_WORKSPACE_MONTHLY_RUN_LIMIT,
             runaway_limit_5min: RUNAWAY_LIMIT_5MIN,
             webhook_ingress_dedupe_mode: crate::config::WebhookIngressDedupeMode::Off,
+            webhook_verification_body_fields: Vec::new(),
+            webhook_verification_header_fields: Vec::new(),
         });
 
         let state = AppState {
@@ -1833,6 +1837,8 @@ mod tests {
             workspace_monthly_run_limit: DEFAULT_WORKSPACE_MONTHLY_RUN_LIMIT,
             runaway_limit_5min: RUNAWAY_LIMIT_5MIN,
             webhook_ingress_dedupe_mode: crate::config::WebhookIngressDedupeMode::Off,
+            webhook_verification_body_fields: Vec::new(),
+            webhook_verification_header_fields: Vec::new(),
         });
 
         let state = AppState {
@@ -2042,6 +2048,8 @@ mod tests {
             workspace_monthly_run_limit: DEFAULT_WORKSPACE_MONTHLY_RUN_LIMIT,
             runaway_limit_5min: RUNAWAY_LIMIT_5MIN,
             webhook_ingress_dedupe_mode: crate::config::WebhookIngressDedupeMode::Off,
+            webhook_verification_body_fields: Vec::new(),
+            webhook_verification_header_fields: Vec::new(),
         });
 
         let state = AppState {
@@ -2212,6 +2220,8 @@ mod tests {
             workspace_monthly_run_limit: DEFAULT_WORKSPACE_MONTHLY_RUN_LIMIT,
             runaway_limit_5min: RUNAWAY_LIMIT_5MIN,
             webhook_ingress_dedupe_mode: crate::config::WebhookIngressDedupeMode::Off,
+            webhook_verification_body_fields: Vec::new(),
+            webhook_verification_header_fields: Vec::new(),
         });
 
         let state = AppState {
@@ -2371,6 +2381,8 @@ mod tests {
             workspace_monthly_run_limit: DEFAULT_WORKSPACE_MONTHLY_RUN_LIMIT,
             runaway_limit_5min: 1,
             webhook_ingress_dedupe_mode: crate::config::WebhookIngressDedupeMode::Off,
+            webhook_verification_body_fields: Vec::new(),
+            webhook_verification_header_fields: Vec::new(),
         });
 
         let state = AppState {

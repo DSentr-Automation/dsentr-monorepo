@@ -15,6 +15,7 @@ pub mod plan_limits;
 pub mod slack;
 pub mod stripe;
 pub(crate) mod webhook_ingress_validation;
+pub(crate) mod webhook_verification;
 pub mod webhooks;
 pub mod workflows;
 pub mod workspaces;
