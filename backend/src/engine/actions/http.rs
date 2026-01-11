@@ -5,10 +5,26 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::redirect;
 use serde_json::{json, Value};
 
+use crate::engine::actions::registry::{ActionExecutionSemantics, ActionManifest, ActionValidator};
+use crate::engine::actions::validate_required_fields;
 use crate::engine::graph::Node;
 use crate::engine::templating::templ_str;
 use crate::models::workflow_run::WorkflowRun;
 use crate::state::AppState;
+
+pub(crate) const MANIFEST: ActionManifest = ActionManifest {
+    action_type: "http",
+    required_fields: &["params"],
+    execution_semantics: ActionExecutionSemantics::Standard,
+};
+
+pub(crate) struct HttpValidator;
+
+impl ActionValidator for HttpValidator {
+    fn validate(&self, node: &Node) -> Result<(), String> {
+        validate_required_fields(node, MANIFEST.required_fields)
+    }
+}
 
 fn mask_json(value: &Value, secrets: &[String]) -> Value {
     match value {

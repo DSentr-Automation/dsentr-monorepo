@@ -1,6 +1,8 @@
 use serde_json::{json, Map, Value};
 use uuid::Uuid;
 
+use crate::engine::actions::registry::{ActionExecutionSemantics, ActionManifest, ActionValidator};
+use crate::engine::actions::validate_required_fields;
 use crate::engine::graph::Node;
 use crate::engine::templating::templ_str;
 use crate::models::oauth_token::ConnectedOAuthProvider;
@@ -14,6 +16,20 @@ use crate::state::AppState;
 use super::{ensure_run_membership, ensure_workspace_plan, resolve_connection_usage};
 
 const DEFAULT_QUERY_PAGE_SIZE: u32 = 25;
+
+pub(crate) const MANIFEST: ActionManifest = ActionManifest {
+    action_type: "notion",
+    required_fields: &["params"],
+    execution_semantics: ActionExecutionSemantics::Standard,
+};
+
+pub(crate) struct NotionValidator;
+
+impl ActionValidator for NotionValidator {
+    fn validate(&self, node: &Node) -> Result<(), String> {
+        validate_required_fields(node, MANIFEST.required_fields)
+    }
+}
 
 pub(crate) async fn execute_notion(
     node: &Node,

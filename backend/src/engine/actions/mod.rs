@@ -7,15 +7,187 @@ mod google;
 mod http;
 mod messaging;
 mod notion;
+pub(crate) mod registry;
+
+use std::sync::Arc;
 
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::engine::actions::registry::{
+    ActionDefinition, ActionExecutionSemantics, ActionExecutor, ActionManifest, ActionValidator,
+    AsanaExecutor, CodeExecutor, ConditionExecutor, EmailExecutor, HttpExecutor, MessagingExecutor,
+    NotionExecutor, SheetsExecutor, TriggerExecutor,
+};
 use crate::engine::templating::templ_str;
-use crate::models::workflow_run::WorkflowRun;
 use crate::state::AppState;
 
 use super::graph::Node;
+
+pub(crate) const TRIGGER_MANIFEST: ActionManifest = ActionManifest {
+    action_type: "trigger",
+    required_fields: &[],
+    execution_semantics: ActionExecutionSemantics::Standard,
+};
+
+pub(crate) const CONDITION_MANIFEST: ActionManifest = ActionManifest {
+    action_type: "condition",
+    required_fields: &[],
+    execution_semantics: ActionExecutionSemantics::Conditional,
+};
+
+pub(crate) const REQUIRED_ACTION_TYPES: &[&str] = &[
+    "trigger",
+    "condition",
+    "delay",
+    "formatter",
+    "http",
+    "email",
+    "messaging",
+    "teams",
+    "slack",
+    "googlechat",
+    "microsoftteams",
+    "sheets",
+    "notion",
+    "code",
+    "asana",
+];
+
+pub(crate) const KIND_ALIASES: &[(&str, &str)] = &[
+    ("trigger", "trigger"),
+    ("condition", "condition"),
+    ("delay", "delay"),
+    ("logicdelay", "delay"),
+    ("wait", "delay"),
+    ("formatter", "formatter"),
+    ("logicformatter", "formatter"),
+    ("transform", "formatter"),
+];
+
+pub(crate) fn action_definitions() -> Vec<ActionDefinition> {
+    let messaging_executor: Arc<dyn ActionExecutor> = Arc::new(MessagingExecutor);
+    let trigger_validator: Arc<dyn ActionValidator> = Arc::new(TriggerValidator);
+    let condition_validator: Arc<dyn ActionValidator> = Arc::new(ConditionValidator);
+    let delay_validator: Arc<dyn ActionValidator> = Arc::new(delay::DelayValidator);
+    let formatter_validator: Arc<dyn ActionValidator> = Arc::new(formatter::FormatterValidator);
+    let http_validator: Arc<dyn ActionValidator> = Arc::new(http::HttpValidator);
+    let email_validator: Arc<dyn ActionValidator> = Arc::new(email::EmailValidator);
+    let messaging_validator: Arc<dyn ActionValidator> = Arc::new(messaging::MessagingValidator);
+    let sheets_validator: Arc<dyn ActionValidator> = Arc::new(google::SheetsValidator);
+    let notion_validator: Arc<dyn ActionValidator> = Arc::new(notion::NotionValidator);
+    let code_validator: Arc<dyn ActionValidator> = Arc::new(code::CodeValidator);
+    let asana_validator: Arc<dyn ActionValidator> = Arc::new(asana::AsanaValidator);
+
+    vec![
+        ActionDefinition {
+            manifest: &TRIGGER_MANIFEST,
+            executor: Some(Arc::new(TriggerExecutor)),
+            validator: Some(trigger_validator.clone()),
+        },
+        ActionDefinition {
+            manifest: &CONDITION_MANIFEST,
+            executor: Some(Arc::new(ConditionExecutor)),
+            validator: Some(condition_validator.clone()),
+        },
+        ActionDefinition {
+            manifest: &delay::MANIFEST,
+            executor: Some(Arc::new(delay::DelayExecutor)),
+            validator: Some(delay_validator.clone()),
+        },
+        ActionDefinition {
+            manifest: &formatter::MANIFEST,
+            executor: Some(Arc::new(formatter::FormatterExecutor)),
+            validator: Some(formatter_validator.clone()),
+        },
+        ActionDefinition {
+            manifest: &http::MANIFEST,
+            executor: Some(Arc::new(HttpExecutor)),
+            validator: Some(http_validator.clone()),
+        },
+        ActionDefinition {
+            manifest: &email::MANIFEST,
+            executor: Some(Arc::new(EmailExecutor)),
+            validator: Some(email_validator.clone()),
+        },
+        ActionDefinition {
+            manifest: &messaging::MANIFEST,
+            executor: Some(messaging_executor.clone()),
+            validator: Some(messaging_validator.clone()),
+        },
+        ActionDefinition {
+            manifest: &messaging::TEAMS_MANIFEST,
+            executor: Some(messaging_executor.clone()),
+            validator: Some(messaging_validator.clone()),
+        },
+        ActionDefinition {
+            manifest: &messaging::SLACK_MANIFEST,
+            executor: Some(messaging_executor.clone()),
+            validator: Some(messaging_validator.clone()),
+        },
+        ActionDefinition {
+            manifest: &messaging::GOOGLECHAT_MANIFEST,
+            executor: Some(messaging_executor.clone()),
+            validator: Some(messaging_validator.clone()),
+        },
+        ActionDefinition {
+            manifest: &messaging::MICROSOFTTEAMS_MANIFEST,
+            executor: Some(messaging_executor),
+            validator: Some(messaging_validator.clone()),
+        },
+        ActionDefinition {
+            manifest: &google::MANIFEST,
+            executor: Some(Arc::new(SheetsExecutor)),
+            validator: Some(sheets_validator.clone()),
+        },
+        ActionDefinition {
+            manifest: &notion::MANIFEST,
+            executor: Some(Arc::new(NotionExecutor)),
+            validator: Some(notion_validator.clone()),
+        },
+        ActionDefinition {
+            manifest: &code::MANIFEST,
+            executor: Some(Arc::new(CodeExecutor)),
+            validator: Some(code_validator.clone()),
+        },
+        ActionDefinition {
+            manifest: &asana::MANIFEST,
+            executor: Some(Arc::new(AsanaExecutor)),
+            validator: Some(asana_validator),
+        },
+    ]
+}
+
+pub(crate) fn validate_required_fields(
+    node: &Node,
+    required_fields: &[&'static str],
+) -> Result<(), String> {
+    for field in required_fields {
+        let Some(value) = node.data.get(*field) else {
+            return Err(format!("Missing required field `{}`", field));
+        };
+        if value.is_null() {
+            return Err(format!("Missing required field `{}`", field));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) struct TriggerValidator;
+
+impl ActionValidator for TriggerValidator {
+    fn validate(&self, node: &Node) -> Result<(), String> {
+        validate_required_fields(node, TRIGGER_MANIFEST.required_fields)
+    }
+}
+
+pub(crate) struct ConditionValidator;
+
+impl ActionValidator for ConditionValidator {
+    fn validate(&self, node: &Node) -> Result<(), String> {
+        validate_required_fields(node, CONDITION_MANIFEST.required_fields)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) enum NodeConnectionUsage {
@@ -392,55 +564,6 @@ fn value_as_string(value: &Value) -> Option<String> {
         Value::Bool(b) => Some(b.to_string()),
         Value::Null => Some(String::new()),
         _ => None,
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn execute_action(
-    node: &Node,
-    context: &Value,
-    allowed_hosts: &[String],
-    disallowed_hosts: &[String],
-    default_deny: bool,
-    is_prod: bool,
-    state: &AppState,
-    run: &WorkflowRun,
-) -> Result<(Value, Option<String>), String> {
-    let action_type = node
-        .data
-        .get("actionType")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_lowercase();
-    match action_type.as_str() {
-        "http" => {
-            http::execute_http(
-                node,
-                context,
-                allowed_hosts,
-                disallowed_hosts,
-                default_deny,
-                is_prod,
-                state,
-                run,
-            )
-            .await
-        }
-        "email" => email::execute_email(node, context, state).await,
-        // Backward/forward compatibility: provider-specific action types
-        // like "teams", "slack", or "googlechat" are routed through the
-        // messaging executor, which will detect the platform from params.
-        "messaging" | "teams" | "slack" | "googlechat" | "microsoftteams" => {
-            messaging::execute_messaging(node, context, state, run).await
-        }
-        "sheets" => google::execute_sheets(node, context, state, run).await,
-        "notion" => notion::execute_notion(node, context, state, run).await,
-        "code" => code::execute_code(node, context).await,
-        "asana" => asana::execute_asana(node, context, state, run).await,
-        _ => Ok((
-            json!({"skipped": true, "reason": "unsupported actionType"}),
-            None,
-        )),
     }
 }
 

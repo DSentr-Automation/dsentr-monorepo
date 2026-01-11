@@ -1,14 +1,14 @@
 mod notion;
 
-use std::time::Duration;
-
-#[cfg(test)]
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::db::postgres_webhook_ingress_dedupe_repository::PostgresWebhookIngressDedupeRepository;
 use crate::db::webhook_ingress_dedupe_repository::WebhookIngressDedupeRepository;
 use crate::engine::actions::{ensure_run_membership, ensure_workspace_plan};
-use crate::engine::{complete_run_with_retry, execute_run, ExecutorError};
+use crate::engine::{
+    build_action_registry, complete_run_with_retry, execute_run, ActionRegistry, ExecutorError,
+};
 use crate::models::workflow::Workflow;
 use crate::models::workflow_run::WorkflowRun;
 use crate::models::workflow_run_event::NewWorkflowRunEvent;
@@ -46,9 +46,10 @@ const MAX_NOTION_POLL_INTERVAL_SECONDS: i64 = 3600;
 const WEBHOOK_DEDUPE_CLEANUP_INTERVAL_SECS: u64 = 86_400;
 
 pub async fn start_background_workers(state: AppState) {
+    let registry = Arc::new(build_action_registry());
     // Simple single-worker for now. Can be extended to multiple tasks.
     tokio::spawn(async move {
-        if let Err(err) = worker_loop(state).await {
+        if let Err(err) = worker_loop(state, registry).await {
             error!(
                 run_id = %err.run_id(),
                 operation = err.operation(),
@@ -60,7 +61,7 @@ pub async fn start_background_workers(state: AppState) {
     });
 }
 
-async fn worker_loop(state: AppState) -> Result<(), ExecutorError> {
+async fn worker_loop(state: AppState, registry: Arc<ActionRegistry>) -> Result<(), ExecutorError> {
     // Periodic retention cleanup
     let retention_days: i32 = std::env::var("RUN_RETENTION_DAYS")
         .ok()
@@ -146,7 +147,10 @@ async fn worker_loop(state: AppState) -> Result<(), ExecutorError> {
             Ok(Some(run)) => {
                 let state_clone = state.clone();
                 let deadline = run_deadline;
-                inflight.spawn(async move { run_with_deadline(state_clone, run, deadline).await });
+                let registry_clone = registry.clone();
+                inflight.spawn(async move {
+                    run_with_deadline(state_clone, run, deadline, registry_clone).await
+                });
             }
             Ok(None) => {
                 if inflight.is_empty() {
@@ -271,6 +275,7 @@ async fn run_with_deadline(
     state: AppState,
     run: WorkflowRun,
     deadline: Duration,
+    registry: Arc<ActionRegistry>,
 ) -> (Uuid, Result<(), ExecutorError>) {
     let run_id = run.id;
 
@@ -283,10 +288,10 @@ async fn run_with_deadline(
     }
 
     if deadline.is_zero() {
-        return (run_id, execute_run(state, run).await.map(|_| ()));
+        return (run_id, execute_run(state, run, registry).await.map(|_| ()));
     }
 
-    match timeout(deadline, execute_run(state.clone(), run)).await {
+    match timeout(deadline, execute_run(state.clone(), run, registry)).await {
         Ok(result) => (run_id, result.map(|_| ())),
         Err(_) => {
             warn!(
@@ -1279,6 +1284,7 @@ mod tests {
     use crate::db::mock_stripe_event_log_repository::MockStripeEventLogRepository;
     use crate::db::workflow_repository::{MockWorkflowRepository, WorkflowRepository};
     use crate::db::workspace_connection_repository::NoopWorkspaceConnectionRepository;
+    use crate::engine::build_action_registry;
     use crate::models::workflow::Workflow;
     use crate::models::workflow_node_run::WorkflowNodeRun;
     use crate::models::workflow_run::WorkflowRun;
@@ -1433,11 +1439,14 @@ mod tests {
         let _max_guard = EnvGuard::set("WORKER_MAX_INFLIGHT_RUNS", "1");
         let _deadline_guard = EnvGuard::set("WORKER_RUN_DEADLINE_SECONDS", "0");
         let state = build_executor_failure_state();
+        let registry = Arc::new(build_action_registry());
 
-        let result =
-            tokio::time::timeout(std::time::Duration::from_millis(500), worker_loop(state))
-                .await
-                .expect("worker loop should complete");
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            worker_loop(state, registry),
+        )
+        .await
+        .expect("worker loop should complete");
 
         let err = result.expect_err("expected executor error");
         assert_eq!(err.operation(), "record_run_event");
@@ -1451,11 +1460,14 @@ mod tests {
         let _max_guard = EnvGuard::set("WORKER_MAX_INFLIGHT_RUNS", "1");
         let _deadline_guard = EnvGuard::set("WORKER_RUN_DEADLINE_SECONDS", "0");
         let state = build_executor_failure_state();
+        let registry = Arc::new(build_action_registry());
 
-        let result =
-            tokio::time::timeout(std::time::Duration::from_millis(500), worker_loop(state))
-                .await
-                .expect("worker loop should complete");
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            worker_loop(state, registry),
+        )
+        .await
+        .expect("worker loop should complete");
 
         assert!(
             result.is_err(),
@@ -1660,7 +1672,8 @@ mod tests {
 
         let worker_state = state.clone();
         let worker_task = tokio::spawn(async move {
-            let _ = worker_loop(worker_state).await;
+            let registry = Arc::new(build_action_registry());
+            let _ = worker_loop(worker_state, registry).await;
         });
 
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -1866,8 +1879,12 @@ mod tests {
 
         // The worker loop should keep running without terminating; we assert it does not
         // return within the timeout window (i.e., stays alive).
-        let result =
-            tokio::time::timeout(std::time::Duration::from_millis(300), worker_loop(state)).await;
+        let registry = Arc::new(build_action_registry());
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(300),
+            worker_loop(state, registry),
+        )
+        .await;
         assert!(
             result.is_err(),
             "worker should remain alive on safe persistence fallback"
@@ -2411,7 +2428,8 @@ mod tests {
             jwt_keys: test_jwt_keys(),
         };
 
-        let (_, result) = run_with_deadline(state, run, Duration::from_secs(5)).await;
+        let registry = Arc::new(build_action_registry());
+        let (_, result) = run_with_deadline(state, run, Duration::from_secs(5), registry).await;
         assert!(result.is_ok());
 
         let completions = completions.lock().unwrap();

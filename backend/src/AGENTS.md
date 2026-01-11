@@ -54,3 +54,5 @@
 - Removed workflow-scoped webhook routing/config and dropped `WEBHOOK_SECRET` from config wiring so only source-scoped ingress remains mounted.
 - Main router now mounts source-scoped webhook subscription management routes for `/api/webhook-sources/:source_id/subscriptions` and `/api/subscriptions/:subscription_id`.
 - Marked the `success_with_data` JsonResponse helper as allowed dead code so the shared response utility stays available without clippy warnings.
+- Backend bootstrap now builds the engine action registry at startup so missing registrations fail fast before workers run.
+- Main now starts background workers without constructing the action registry directly; worker startup builds the registry explicitly while keeping it crate-scoped.

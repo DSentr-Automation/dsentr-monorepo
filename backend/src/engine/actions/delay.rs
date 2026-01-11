@@ -1,8 +1,76 @@
+use async_trait::async_trait;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::time::Duration;
+
+use crate::engine::actions::registry::{
+    ActionExecutionResult, ActionExecutionSemantics, ActionExecutor, ActionManifest,
+    ActionRuntimeContext, ActionValidator,
+};
+use crate::engine::actions::validate_required_fields;
+use crate::engine::graph::Node;
+
+pub(crate) const MANIFEST: ActionManifest = ActionManifest {
+    action_type: "delay",
+    required_fields: &["config"],
+    execution_semantics: ActionExecutionSemantics::Resumable,
+};
+
+pub(crate) struct DelayValidator;
+
+impl ActionValidator for DelayValidator {
+    fn validate(&self, node: &Node) -> Result<(), String> {
+        validate_required_fields(node, MANIFEST.required_fields)?;
+        let config_value = node.data.get("config").cloned().unwrap_or(Value::Null);
+        parse_delay_config(&config_value).map(|_| ())
+    }
+}
+
+pub(crate) struct DelayExecutor;
+
+#[async_trait]
+impl ActionExecutor for DelayExecutor {
+    async fn execute(
+        &self,
+        ctx: ActionRuntimeContext<'_>,
+    ) -> Result<ActionExecutionResult, String> {
+        let config_value = ctx.node.data.get("config").cloned().unwrap_or(Value::Null);
+        let config = parse_delay_config(&config_value)
+            .map_err(|err| format!("Invalid delay config: {err}"))?;
+        let mut rng = rand::rng();
+        let plan = compute_delay_plan(&config, Utc::now(), &mut rng)
+            .map_err(|err| format!("Delay planning failed: {err}"))?;
+
+        let outputs = match &plan {
+            DelayOutcome::NoWait { base_delay } => json!({
+                "resumeAt": Value::Null,
+                "delaySeconds": base_delay.as_secs(),
+                "jitterAppliedSeconds": 0,
+                "mode": "duration"
+            }),
+            DelayOutcome::Wait(comp) => json!({
+                "resumeAt": comp.resume_at.to_rfc3339(),
+                "delaySeconds": comp.total_delay.as_secs(),
+                "baseDelaySeconds": comp.base_delay.as_secs(),
+                "jitterAppliedSeconds": comp.jitter_applied.as_secs(),
+                "mode": "duration_or_absolute"
+            }),
+        };
+
+        match plan {
+            DelayOutcome::Wait(comp) => Ok(ActionExecutionResult::Pause {
+                outputs,
+                resume_at: comp.resume_at,
+            }),
+            DelayOutcome::NoWait { .. } => Ok(ActionExecutionResult::Immediate {
+                outputs,
+                selected_next: None,
+            }),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]

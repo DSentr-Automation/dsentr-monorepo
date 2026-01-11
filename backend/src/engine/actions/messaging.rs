@@ -1,4 +1,6 @@
 use crate::engine::actions::ensure_workspace_plan;
+use crate::engine::actions::registry::{ActionExecutionSemantics, ActionManifest, ActionValidator};
+use crate::engine::actions::validate_required_fields;
 use crate::engine::graph::Node;
 use crate::engine::templating::templ_str;
 use crate::models::oauth_token::ConnectedOAuthProvider;
@@ -19,6 +21,46 @@ use urlencoding::encode;
 use uuid::Uuid;
 
 use super::{ensure_run_membership, resolve_connection_usage, NodeConnectionUsage};
+
+const MESSAGING_REQUIRED_FIELDS: &[&str] = &["params"];
+
+pub(crate) const MANIFEST: ActionManifest = ActionManifest {
+    action_type: "messaging",
+    required_fields: MESSAGING_REQUIRED_FIELDS,
+    execution_semantics: ActionExecutionSemantics::Standard,
+};
+
+pub(crate) const TEAMS_MANIFEST: ActionManifest = ActionManifest {
+    action_type: "teams",
+    required_fields: MESSAGING_REQUIRED_FIELDS,
+    execution_semantics: ActionExecutionSemantics::Standard,
+};
+
+pub(crate) const SLACK_MANIFEST: ActionManifest = ActionManifest {
+    action_type: "slack",
+    required_fields: MESSAGING_REQUIRED_FIELDS,
+    execution_semantics: ActionExecutionSemantics::Standard,
+};
+
+pub(crate) const GOOGLECHAT_MANIFEST: ActionManifest = ActionManifest {
+    action_type: "googlechat",
+    required_fields: MESSAGING_REQUIRED_FIELDS,
+    execution_semantics: ActionExecutionSemantics::Standard,
+};
+
+pub(crate) const MICROSOFTTEAMS_MANIFEST: ActionManifest = ActionManifest {
+    action_type: "microsoftteams",
+    required_fields: MESSAGING_REQUIRED_FIELDS,
+    execution_semantics: ActionExecutionSemantics::Standard,
+};
+
+pub(crate) struct MessagingValidator;
+
+impl ActionValidator for MessagingValidator {
+    fn validate(&self, node: &Node) -> Result<(), String> {
+        validate_required_fields(node, MANIFEST.required_fields)
+    }
+}
 
 const DEFAULT_MICROSOFT_GRAPH_BASE_URL: &str = "https://graph.microsoft.com/v1.0";
 
