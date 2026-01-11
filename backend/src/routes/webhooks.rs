@@ -1368,6 +1368,7 @@ pub async fn webhook_ingress(
     };
 
     handle_webhook_ingress(
+        &app_state,
         &dedupe_repo,
         &delivery_repo,
         &source_repo,
@@ -1389,6 +1390,7 @@ pub async fn webhook_ingress(
 
 #[allow(clippy::too_many_arguments)]
 async fn handle_webhook_ingress(
+    app_state: &AppState,
     dedupe_repo: &dyn WebhookIngressDedupeRepository,
     delivery_repo: &dyn WebhookDeliveryRepository,
     source_repo: &dyn WebhookSourceRepository,
@@ -1851,7 +1853,35 @@ async fn handle_webhook_ingress(
                 .collect(),
         );
 
-        match workflow_repo
+        let mut workspace_quota = None;
+        match app_state
+            .consume_workspace_run_quota(source.workspace_id)
+            .await
+        {
+            Ok(Some(ticket)) => {
+                if ticket.run_count > ticket.limit {
+                    warn!(
+                        workspace_id = %source.workspace_id,
+                        run_count = ticket.run_count,
+                        overage_count = ticket.overage_count,
+                        limit = ticket.limit,
+                        "workspace run overage recorded for webhook run"
+                    );
+                }
+                workspace_quota = Some(ticket);
+            }
+            Ok(None) => {}
+            Err(err) => {
+                warn!(
+                    ?err,
+                    workspace_id = %source.workspace_id,
+                    trigger = "webhook",
+                    "failed to consume workspace run quota"
+                );
+            }
+        }
+
+        let outcome = match workflow_repo
             .create_workflow_run(
                 workflow.user_id,
                 workflow.id,
@@ -1861,27 +1891,10 @@ async fn handle_webhook_ingress(
             )
             .await
         {
-            Ok(_) => {
-                enqueued += 1;
-                info!(
-                    webhook_source_id = %source.id,
-                    subscription_id = %subscription.id,
-                    workflow_id = %workflow.id,
-                    trigger_node_id = %subscription.trigger_node_id,
-                    %event_type,
-                    "webhook run enqueued"
-                );
-                if delivery_logged {
-                    update_delivery_status_safe(
-                        delivery_repo,
-                        delivery_id,
-                        DELIVERY_STATUS_ROUTED,
-                        None,
-                    )
-                    .await;
-                }
-            }
             Err(err) => {
+                if let Some(ticket) = workspace_quota {
+                    let _ = app_state.release_workspace_run_quota(ticket).await;
+                }
                 failed += 1;
                 error!(
                     ?err,
@@ -1901,7 +1914,27 @@ async fn handle_webhook_ingress(
                     )
                     .await;
                 }
+                continue;
             }
+            Ok(outcome) => outcome,
+        };
+
+        if let (Some(ticket), false) = (workspace_quota, outcome.created) {
+            let _ = app_state.release_workspace_run_quota(ticket).await;
+        }
+
+        enqueued += 1;
+        info!(
+            webhook_source_id = %source.id,
+            subscription_id = %subscription.id,
+            workflow_id = %workflow.id,
+            trigger_node_id = %subscription.trigger_node_id,
+            %event_type,
+            "webhook run enqueued"
+        );
+        if delivery_logged {
+            update_delivery_status_safe(delivery_repo, delivery_id, DELIVERY_STATUS_ROUTED, None)
+                .await;
         }
     }
 
@@ -1925,7 +1958,15 @@ async fn handle_webhook_ingress(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{
+        Config, OAuthProviderConfig, OAuthSettings, StripeSettings, DEFAULT_WORKSPACE_MEMBER_LIMIT,
+        DEFAULT_WORKSPACE_MONTHLY_RUN_LIMIT, RUNAWAY_LIMIT_5MIN,
+    };
+    use crate::db::mock_db::{MockDb, NoopWorkflowRepository, StaticWorkspaceMembershipRepository};
+    use crate::db::mock_stripe_event_log_repository::MockStripeEventLogRepository;
     use crate::db::workflow_repository::{CreateWorkflowRunOutcome, MockWorkflowRepository};
+    use crate::db::workspace_connection_repository::NoopWorkspaceConnectionRepository;
+    use crate::db::workspace_repository::WorkspaceRepository;
     use crate::models::webhook_source::WebhookSource;
     use crate::models::webhook_subscription::WebhookSubscription;
     use crate::models::workflow::Workflow;
@@ -1934,10 +1975,21 @@ mod tests {
     use crate::routes::webhook_ingress_validation::{
         compute_signature, SIGNATURE_HEADER, TIMESTAMP_HEADER,
     };
+    use crate::services::{
+        oauth::{
+            account_service::OAuthAccountService, github::mock_github_oauth::MockGitHubOAuth,
+            google::mock_google_oauth::MockGoogleOAuth, workspace_service::WorkspaceOAuthService,
+        },
+        smtp_mailer::MockMailer,
+        stripe::MockStripeService,
+    };
+    use crate::state::{test_pg_pool, AppState};
     use crate::utils::encryption::encrypt_secret;
+    use crate::utils::jwt::JwtKeys;
     use async_trait::async_trait;
     use axum::body::to_bytes;
     use axum::http::StatusCode;
+    use reqwest::Client;
     use serde_json::json;
     use std::collections::HashSet;
     use std::sync::{Arc, Mutex};
@@ -1950,6 +2002,7 @@ mod tests {
 
     #[allow(clippy::too_many_arguments)]
     async fn invoke_handle_webhook_ingress_with_payload(
+        app_state: &AppState,
         dedupe_repo: &dyn WebhookIngressDedupeRepository,
         delivery_repo: &dyn WebhookDeliveryRepository,
         source_repo: &dyn WebhookSourceRepository,
@@ -1965,6 +2018,7 @@ mod tests {
         let payload: Value = serde_json::from_slice(body).expect("valid JSON payload");
 
         handle_webhook_ingress(
+            app_state,
             dedupe_repo,
             delivery_repo,
             source_repo,
@@ -2561,6 +2615,91 @@ mod tests {
         repo
     }
 
+    fn test_config() -> Arc<Config> {
+        Arc::new(Config {
+            database_url: "postgres://localhost/test".into(),
+            frontend_origin: "https://app.example.com".into(),
+            admin_origin: "https://app.example.com".into(),
+            oauth: OAuthSettings {
+                google: OAuthProviderConfig {
+                    client_id: "client".into(),
+                    client_secret: "secret".into(),
+                    redirect_uri: "https://app.example.com/oauth/google".into(),
+                },
+                microsoft: OAuthProviderConfig {
+                    client_id: "client".into(),
+                    client_secret: "secret".into(),
+                    redirect_uri: "https://app.example.com/oauth/microsoft".into(),
+                },
+                slack: OAuthProviderConfig {
+                    client_id: "client".into(),
+                    client_secret: "secret".into(),
+                    redirect_uri: "https://app.example.com/oauth/slack".into(),
+                },
+                asana: OAuthProviderConfig {
+                    client_id: "client".into(),
+                    client_secret: "secret".into(),
+                    redirect_uri: "https://app.example.com/oauth/asana".into(),
+                },
+                notion: OAuthProviderConfig {
+                    client_id: "client".into(),
+                    client_secret: "secret".into(),
+                    redirect_uri: "https://app.example.com/oauth/asana".into(),
+                },
+                token_encryption_key: vec![0; 32],
+            },
+            api_secrets_encryption_key: vec![1; 32],
+            stripe: StripeSettings {
+                client_id: "stub".into(),
+                secret_key: "stub".into(),
+                webhook_secret: "0123456789abcdef0123456789ABCDEF".into(),
+            },
+            auth_cookie_secure: true,
+            jwt_issuer: "test-issuer".into(),
+            jwt_audience: "test-audience".into(),
+            workspace_member_limit: DEFAULT_WORKSPACE_MEMBER_LIMIT,
+            workspace_monthly_run_limit: DEFAULT_WORKSPACE_MONTHLY_RUN_LIMIT,
+            runaway_limit_5min: RUNAWAY_LIMIT_5MIN,
+            webhook_ingress_dedupe_mode: WebhookIngressDedupeMode::Off,
+            webhook_verification_body_fields: Vec::new(),
+            webhook_verification_header_fields: Vec::new(),
+            webhook_event_type_fields: vec!["event_type".to_string(), "type".to_string()],
+        })
+    }
+
+    fn test_jwt_keys() -> Arc<JwtKeys> {
+        Arc::new(
+            JwtKeys::from_secret("0123456789abcdef0123456789abcdef")
+                .expect("test JWT secret should be valid"),
+        )
+    }
+
+    fn test_state(workspace_repo: Arc<dyn WorkspaceRepository>) -> AppState {
+        AppState {
+            db: Arc::new(MockDb::default()),
+            workflow_repo: Arc::new(NoopWorkflowRepository),
+            workspace_repo,
+            workspace_connection_repo: Arc::new(NoopWorkspaceConnectionRepository),
+            stripe_event_log_repo: Arc::new(MockStripeEventLogRepository::default()),
+            db_pool: test_pg_pool(),
+            mailer: Arc::new(MockMailer::default()),
+            google_oauth: Arc::new(MockGoogleOAuth::default()),
+            github_oauth: Arc::new(MockGitHubOAuth::default()),
+            oauth_accounts: OAuthAccountService::test_stub(),
+            workspace_oauth: WorkspaceOAuthService::test_stub(),
+            stripe: Arc::new(MockStripeService::new()),
+            http_client: Arc::new(Client::new()),
+            config: test_config(),
+            worker_id: Arc::new("worker-1".into()),
+            worker_lease_seconds: 30,
+            jwt_keys: test_jwt_keys(),
+        }
+    }
+
+    fn default_app_state() -> AppState {
+        test_state(Arc::new(StaticWorkspaceMembershipRepository::allowing()))
+    }
+
     fn sign_payload(secret: &str, timestamp: &str, body: &[u8]) -> String {
         compute_signature(secret, timestamp, body).expect("signature")
     }
@@ -3022,8 +3161,10 @@ mod tests {
         let workflow_repo = MockWorkflowRepository::new();
         let dedupe_repo = StubWebhookIngressDedupeRepo::default();
         let delivery_repo = StubWebhookDeliveryRepo::default();
+        let app_state = default_app_state();
 
         let response = invoke_handle_webhook_ingress_with_payload(
+            &app_state,
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -3057,8 +3198,10 @@ mod tests {
         let workflow_repo = MockWorkflowRepository::new();
         let dedupe_repo = StubWebhookIngressDedupeRepo::default();
         let delivery_repo = StubWebhookDeliveryRepo::default();
+        let app_state = default_app_state();
 
         let response = invoke_handle_webhook_ingress_with_payload(
+            &app_state,
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -3091,12 +3234,14 @@ mod tests {
         let workflow_repo = MockWorkflowRepository::new();
         let dedupe_repo = StubWebhookIngressDedupeRepo::default();
         let delivery_repo = StubWebhookDeliveryRepo::default();
+        let app_state = default_app_state();
 
         let mut headers = HeaderMap::new();
         headers.insert(TIMESTAMP_HEADER, "1700000000".parse().unwrap());
         headers.insert(SIGNATURE_HEADER, "v1=deadbeef".parse().unwrap());
 
         let response = invoke_handle_webhook_ingress_with_payload(
+            &app_state,
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -3130,6 +3275,7 @@ mod tests {
         let workflow_repo = MockWorkflowRepository::new();
         let dedupe_repo = StubWebhookIngressDedupeRepo::default();
         let delivery_repo = StubWebhookDeliveryRepo::default();
+        let app_state = default_app_state();
 
         let timestamp = "1700000000";
         let body = br#"{"event_type":"invoice.created"}"#;
@@ -3142,6 +3288,7 @@ mod tests {
         );
 
         let response = invoke_handle_webhook_ingress_with_payload(
+            &app_state,
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -3245,7 +3392,9 @@ mod tests {
 
         let dedupe_repo = StubWebhookIngressDedupeRepo::default();
         let delivery_repo = StubWebhookDeliveryRepo::default();
+        let app_state = default_app_state();
         let response = invoke_handle_webhook_ingress_with_payload(
+            &app_state,
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -3264,6 +3413,109 @@ mod tests {
         let body = to_bytes(response.into_body(), 1024).await.unwrap();
         let payload: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(payload["success"], json!(true));
+    }
+
+    #[tokio::test]
+    async fn webhook_ingress_consumes_workspace_run_quota_per_run() {
+        let key = vec![9u8; 32];
+        let source_id = Uuid::new_v4();
+        let workspace_id = Uuid::new_v4();
+        let secret = encrypt_secret(&key, "secret").expect("encrypt");
+        let mut source = webhook_source_fixture(source_id, workspace_id, secret);
+        source.require_hmac = false;
+        let repo = StubWebhookSourceRepo {
+            source: Some(source),
+            ..Default::default()
+        };
+
+        let workflow = workflow_fixture(workspace_id, Uuid::new_v4());
+        let workflow_id = workflow.id;
+        let subscription_repo = StubWebhookSubscriptionRepo {
+            subscriptions: vec![
+                WebhookSubscription {
+                    id: Uuid::new_v4(),
+                    webhook_source_id: source_id,
+                    workflow_id,
+                    trigger_node_id: Uuid::new_v4(),
+                    event_type: "invoice.created".into(),
+                    enabled: true,
+                    created_at: OffsetDateTime::now_utc(),
+                    updated_at: OffsetDateTime::now_utc(),
+                },
+                WebhookSubscription {
+                    id: Uuid::new_v4(),
+                    webhook_source_id: source_id,
+                    workflow_id,
+                    trigger_node_id: Uuid::new_v4(),
+                    event_type: "invoice.created".into(),
+                    enabled: true,
+                    created_at: OffsetDateTime::now_utc(),
+                    updated_at: OffsetDateTime::now_utc(),
+                },
+            ],
+        };
+
+        let mut workflow_repo = MockWorkflowRepository::new();
+        let workflow_for_find = workflow.clone();
+        workflow_repo
+            .expect_find_workflow_by_id_public()
+            .times(2)
+            .returning(move |_| {
+                let wf = workflow_for_find.clone();
+                Box::pin(async move { Ok(Some(wf)) })
+            });
+        workflow_repo
+            .expect_create_workflow_run()
+            .times(2)
+            .returning(move |_, wf_id, ws_id, snapshot, _| {
+                assert_eq!(wf_id, workflow_id);
+                assert_eq!(ws_id, Some(workspace_id));
+                assert!(snapshot.get("_trigger_context").is_some());
+                let now = OffsetDateTime::now_utc();
+                let run = WorkflowRun {
+                    id: Uuid::new_v4(),
+                    user_id: Uuid::new_v4(),
+                    workflow_id: wf_id,
+                    workspace_id: ws_id,
+                    snapshot,
+                    status: "queued".into(),
+                    error: None,
+                    idempotency_key: None,
+                    started_at: now,
+                    resume_at: now,
+                    finished_at: None,
+                    created_at: now,
+                    updated_at: now,
+                };
+                Box::pin(async move { Ok(CreateWorkflowRunOutcome { run, created: true }) })
+            });
+
+        let workspace_repo = Arc::new(StaticWorkspaceMembershipRepository::allowing());
+        let app_state = test_state(workspace_repo.clone());
+        let dedupe_repo = StubWebhookIngressDedupeRepo::default();
+        let delivery_repo = StubWebhookDeliveryRepo::default();
+
+        let response = invoke_handle_webhook_ingress_with_payload(
+            &app_state,
+            &dedupe_repo,
+            &delivery_repo,
+            &repo,
+            &subscription_repo,
+            &workflow_repo,
+            WebhookIngressDedupeMode::Off,
+            &key,
+            source_id,
+            &HeaderMap::new(),
+            br#"{"event_type":"invoice.created","amount":1200}"#,
+            OffsetDateTime::now_utc(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let period_starts = workspace_repo.last_period_starts();
+        assert_eq!(period_starts.len(), 2);
+        let usage = workspace_repo.usage_for(workspace_id, period_starts[0]);
+        assert_eq!(usage.run_count, 2);
     }
 
     #[tokio::test]
@@ -3287,7 +3539,9 @@ mod tests {
 
         let dedupe_repo = StubWebhookIngressDedupeRepo::default();
         let delivery_repo = StubWebhookDeliveryRepo::default();
+        let app_state = default_app_state();
         let response = invoke_handle_webhook_ingress_with_payload(
+            &app_state,
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -3327,8 +3581,10 @@ mod tests {
         let dedupe_repo = StubWebhookIngressDedupeRepo::default();
         let delivery_repo = StubWebhookDeliveryRepo::default();
         let now = OffsetDateTime::from_unix_timestamp(1_700_000_020).unwrap();
+        let app_state = default_app_state();
 
         let response = invoke_handle_webhook_ingress_with_payload(
+            &app_state,
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -3425,8 +3681,10 @@ mod tests {
         let dedupe_repo = StubWebhookIngressDedupeRepo::default();
         let delivery_repo = StubWebhookDeliveryRepo::new(true, false);
         let now = OffsetDateTime::from_unix_timestamp(1_700_000_030).unwrap();
+        let app_state = default_app_state();
 
         let response = invoke_handle_webhook_ingress_with_payload(
+            &app_state,
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -3553,7 +3811,9 @@ mod tests {
 
         let dedupe_repo = StubWebhookIngressDedupeRepo::default();
         let delivery_repo = StubWebhookDeliveryRepo::default();
+        let app_state = default_app_state();
         let response = invoke_handle_webhook_ingress_with_payload(
+            &app_state,
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -3675,7 +3935,9 @@ mod tests {
 
         let dedupe_repo = StubWebhookIngressDedupeRepo::default();
         let delivery_repo = StubWebhookDeliveryRepo::default();
+        let app_state = default_app_state();
         let response = invoke_handle_webhook_ingress_with_payload(
+            &app_state,
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -3765,8 +4027,10 @@ mod tests {
         headers.insert(SIGNATURE_HEADER, "v1=deadbeef".parse().unwrap());
         let body = br#"{"event_type":"invoice.created","amount":1200}"#;
         let now = OffsetDateTime::from_unix_timestamp(1_700_000_010).unwrap();
+        let app_state = default_app_state();
 
         let response = invoke_handle_webhook_ingress_with_payload(
+            &app_state,
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -3783,6 +4047,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::ACCEPTED);
 
         let response = invoke_handle_webhook_ingress_with_payload(
+            &app_state,
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -3870,8 +4135,10 @@ mod tests {
         headers.insert(SIGNATURE_HEADER, "v1=deadbeef".parse().unwrap());
         let body = br#"{"event_type":"invoice.created","amount":1200}"#;
         let now = OffsetDateTime::from_unix_timestamp(1_700_000_010).unwrap();
+        let app_state = default_app_state();
 
         let response = invoke_handle_webhook_ingress_with_payload(
+            &app_state,
             &dedupe_repo,
             &delivery_repo,
             &repo,
@@ -3888,6 +4155,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::ACCEPTED);
 
         let response = invoke_handle_webhook_ingress_with_payload(
+            &app_state,
             &dedupe_repo,
             &delivery_repo,
             &repo,

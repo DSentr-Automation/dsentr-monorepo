@@ -102,3 +102,4 @@
 - Webhook ingress now records delivery log entries (received/routed/dropped/errored) after authentication and keeps logging failures non-blocking so operators can observe inbound webhook activity.
 - Webhook ingress metrics now include explicit counters for matched subscriptions and run enqueue outcomes, plus test coverage uses a delivery repo in replay rejection cases.
 - Webhook route helpers now allow targeted clippy warnings for large Response errors/argument lists and avoid needless tracing borrows to keep ingress signatures stable.
+- Webhook ingress now consumes workspace run quota per enqueued run and releases quota when enqueue attempts fail so run usage stays accurate.
