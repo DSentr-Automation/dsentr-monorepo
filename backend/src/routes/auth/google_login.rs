@@ -141,18 +141,16 @@ pub async fn google_callback(
     let user = match app_state.db.find_user_by_email(email).await {
         Ok(Some(user)) => {
             match (&user.oauth_provider, OauthProvider::Google) {
-                // ✅ user signed up with Google, allow login
+                // user signed up with Google, allow login
                 (Some(OauthProvider::Google), _) => user,
-
-                // ❌ user signed up with email/password
+                // user signed up with email/password
                 (None, _) => {
                     return JsonResponse::redirect_to_login_with_error(
                         "This account was created using email/password. Please log in with email.",
                     )
                     .into_response();
                 }
-
-                // ❌ user signed up with another OAuth provider (e.g., GitHub)
+                // user signed up with another OAuth provider (e.g., GitHub)
                 (Some(other), _) => {
                     let reveal_provider = true;
 
@@ -198,7 +196,7 @@ pub async fn google_callback(
                         }
                     }
                 } else {
-                    // invalid value — treat as not accepted
+                    // invalid value - treat as not accepted
                     let secure_cookie = app_state.config.auth_cookie_secure;
                     let clear_state_cookie = Cookie::build(("oauth_state", ""))
                         .path("/")
@@ -441,6 +439,7 @@ mod tests {
             oauth_accounts: OAuthAccountService::test_stub(),
             workspace_oauth: WorkspaceOAuthService::test_stub(),
             stripe: Arc::new(crate::services::stripe::MockStripeService::new()),
+            integration_registry: crate::state::test_integration_registry(),
             http_client: Arc::new(Client::new()),
             config,
             worker_id: Arc::new("test-worker".into()),
@@ -500,6 +499,7 @@ mod tests {
             oauth_accounts: OAuthAccountService::test_stub(),
             workspace_oauth: WorkspaceOAuthService::test_stub(),
             stripe: Arc::new(crate::services::stripe::MockStripeService::new()),
+            integration_registry: crate::state::test_integration_registry(),
             http_client: Arc::new(Client::new()),
             config,
             worker_id: Arc::new("test-worker".to_string()),
@@ -549,8 +549,7 @@ mod tests {
     async fn test_google_callback_internal_failure() {
         std::env::set_var("GOOGLE_CLIENT_ID", "test_client_id");
         std::env::set_var("GOOGLE_CLIENT_SECRET", "test_client_secret");
-
-        // Mock that simulates failure — override GitHubOAuth behavior
+        // Mock that simulates failure - override GitHubOAuth behavior
         #[derive(Default)]
         struct FailingGoogleOAuth;
 
@@ -581,6 +580,7 @@ mod tests {
             oauth_accounts: OAuthAccountService::test_stub(),
             workspace_oauth: WorkspaceOAuthService::test_stub(),
             stripe: Arc::new(crate::services::stripe::MockStripeService::new()),
+            integration_registry: crate::state::test_integration_registry(),
             http_client: Arc::new(Client::new()),
             config: test_config(),
             worker_id: Arc::new("test-worker".to_string()),

@@ -112,7 +112,7 @@ pub async fn github_callback(
     let email = user_info.email;
 
     let first_name = user_info.first_name;
-    let last_name = user_info.last_name; // GitHub doesn’t expose last name
+    let last_name = user_info.last_name; // GitHub does not expose last name
 
     let user = match app_state.db.find_user_by_email(&email).await {
         Ok(Some(user)) => match (&user.oauth_provider, OauthProvider::Github) {
@@ -404,6 +404,7 @@ mod tests {
             oauth_accounts: OAuthAccountService::test_stub(),
             workspace_oauth: WorkspaceOAuthService::test_stub(),
             stripe: Arc::new(crate::services::stripe::MockStripeService::new()),
+            integration_registry: crate::state::test_integration_registry(),
             http_client: Arc::new(Client::new()),
             config,
             worker_id: Arc::new("test-worker".into()),
@@ -458,6 +459,7 @@ mod tests {
             oauth_accounts: OAuthAccountService::test_stub(),
             workspace_oauth: WorkspaceOAuthService::test_stub(),
             stripe: Arc::new(crate::services::stripe::MockStripeService::new()),
+            integration_registry: crate::state::test_integration_registry(),
             http_client: Arc::new(Client::new()),
             config: test_config(),
             worker_id: Arc::new("test-worker".to_string()),
@@ -505,7 +507,7 @@ mod tests {
         std::env::set_var("GITHUB_CLIENT_ID", "test_client_id");
         std::env::set_var("GITHUB_CLIENT_SECRET", "test_client_secret");
 
-        // Mock that simulates failure — override GitHubOAuth behavior
+        // Mock that simulates failure - override GitHubOAuth behavior
         #[derive(Default)]
         struct FailingGitHubOAuth;
 
@@ -539,6 +541,7 @@ mod tests {
             oauth_accounts: OAuthAccountService::test_stub(),
             workspace_oauth: WorkspaceOAuthService::test_stub(),
             stripe: Arc::new(crate::services::stripe::MockStripeService::new()),
+            integration_registry: crate::state::test_integration_registry(),
             http_client: Arc::new(Client::new()),
             config: test_config(),
             worker_id: Arc::new("test-worker".to_string()),

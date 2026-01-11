@@ -1,6 +1,7 @@
 mod config;
 mod db;
 mod engine;
+mod integrations;
 mod models;
 mod responses;
 mod routes;
@@ -62,11 +63,11 @@ use routes::{
     },
     microsoft::{list_channel_members, list_team_channels, list_teams},
     oauth::{
-        asana_connect_callback, asana_connect_start, disconnect_connection, get_connection_by_id,
-        google_connect_callback, google_connect_start, list_connections, list_provider_connections,
-        microsoft_connect_callback, microsoft_connect_start, notion_connect_callback,
-        notion_connect_start, refresh_connection, revoke_connection, slack_connect_callback,
-        slack_connect_start,
+        asana_connect_callback, asana_connect_start, assert_oauth_provider_mappings,
+        disconnect_connection, get_connection_by_id, google_connect_callback, google_connect_start,
+        list_connections, list_provider_connections, microsoft_connect_callback,
+        microsoft_connect_start, notion_connect_callback, notion_connect_start, refresh_connection,
+        revoke_connection, slack_connect_callback, slack_connect_start,
     },
     options::{
         secrets::{delete_secret, list_secrets, upsert_secret},
@@ -116,6 +117,7 @@ use crate::db::{
     workspace_connection_repository::WorkspaceConnectionRepository,
     workspace_repository::WorkspaceRepository,
 };
+use crate::integrations::build_integration_registry;
 use crate::routes::asana::get_task_details;
 use crate::services::pluggable_mailer::PluggableMailer;
 use crate::services::stripe::{LiveStripeService, StripeService};
@@ -157,7 +159,7 @@ async fn main() -> Result<()> {
             })?,
     );
 
-    // ✅ Background task to cleanup old IPs
+    // Background task to clean up old IPs
     let governor_limiter = governor_conf.limiter().clone();
     std::thread::spawn(move || {
         let interval = std::time::Duration::from_secs(60);
@@ -329,6 +331,15 @@ async fn main() -> Result<()> {
 
     let stripe: Arc<dyn StripeService> = Arc::new(LiveStripeService::from_settings(&config.stripe));
 
+    let integration_registry = Arc::new(build_integration_registry().map_err(|error| {
+        tracing::error!(error = %error, "Failed to build integration registry");
+        error
+    })?);
+    if let Err(message) = assert_oauth_provider_mappings(integration_registry.as_ref()) {
+        tracing::error!(%message, "OAuth provider mapping validation failed");
+        return Err(anyhow!(message));
+    }
+
     let state = AppState {
         db: user_repo,
         workflow_repo,
@@ -342,6 +353,7 @@ async fn main() -> Result<()> {
         oauth_accounts,
         workspace_oauth,
         stripe,
+        integration_registry,
         http_client: http_client_arc,
         config: config.clone(),
         worker_id: Arc::new(uuid::Uuid::new_v4().to_string()),
@@ -912,6 +924,6 @@ async fn establish_connection(database_url: &str) -> Result<PgPool> {
         })
         .context("failed to verify database connection")?;
 
-    info!("✅ Successfully connected to the database");
+    info!("Successfully connected to the database");
     Ok(pool)
 }

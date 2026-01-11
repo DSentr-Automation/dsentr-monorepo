@@ -56,3 +56,7 @@
 - Marked the `success_with_data` JsonResponse helper as allowed dead code so the shared response utility stays available without clippy warnings.
 - Backend bootstrap now builds the engine action registry at startup so missing registrations fail fast before workers run.
 - Main now starts background workers without constructing the action registry directly; worker startup builds the registry explicitly while keeping it crate-scoped.
+- AppState now carries an integration registry built at startup so integration manifests can be validated once and shared across routes/workers.
+- Integration registry test helpers are now test-only so production code cannot construct empty registries.
+- Test integration registry helpers now build the default manifests so OAuth route tests can resolve provider metadata.
+- Main now validates the OAuth provider mapping against the integration registry at startup to fail fast on missing mappings.

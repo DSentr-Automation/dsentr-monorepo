@@ -19,6 +19,42 @@ export const SLACK_PERSONAL_AUTHORIZED_HINT =
 export const SLACK_PERSONAL_AUTH_REQUIRED =
   'Authorize Slack for yourself to post as you.'
 
+export type IntegrationAuthType = 'oauth2' | 'api_key' | 'none' | string
+export type IntegrationTokenScope =
+  | 'personal'
+  | 'workspace'
+  | 'personal_and_workspace'
+  | string
+export type IntegrationOwnershipModel =
+  | 'personal_only'
+  | 'workspace_only'
+  | 'hybrid'
+  | string
+
+export interface IntegrationManifest {
+  integrationId: string
+  authType: IntegrationAuthType
+  tokenScope: IntegrationTokenScope
+  ownershipModel: IntegrationOwnershipModel
+  providerConstraints: {
+    workspaceFirst: boolean
+    singleInstallPerWorkspace: boolean
+  }
+  uiMetadata: {
+    displayName: string
+    description: string
+    iconKey?: string
+    docsUrl?: string
+  }
+  oauthMetadata?: {
+    scopes: string[]
+  }
+}
+
+export interface PersonalAuthStatus {
+  hasPersonalAuth: boolean
+  personalAuthConnectedAt?: string
+}
 export interface BaseConnectionInfo {
   scope: ConnectionScope
   id: string | null
@@ -60,24 +96,15 @@ export interface PersonalConnectionRecord extends PersonalConnectionInfo {
   provider: OAuthProvider
 }
 
-export interface SlackPersonalAuthState {
-  hasPersonalAuth: boolean
-  personalAuthConnectedAt?: string
-}
+export type SlackPersonalAuthState = PersonalAuthStatus
 
 export interface GroupedConnectionsSnapshot {
   personal: PersonalConnectionRecord[]
   workspace: WorkspaceConnectionInfo[]
   slackPersonalAuth?: SlackPersonalAuthState
+  personalAuth?: Record<string, PersonalAuthStatus>
+  manifests?: IntegrationManifest[]
 }
-
-const PROVIDER_KEYS: OAuthProvider[] = [
-  'google',
-  'microsoft',
-  'slack',
-  'asana',
-  'notion'
-]
 
 const resolveApiBaseUrl = (): string => {
   const rawBase =
@@ -120,6 +147,34 @@ const defaultPersonalConnection = (): PersonalConnectionInfo => ({
   isShared: false
 })
 
+const cloneManifests = (
+  value?: IntegrationManifest[] | null
+): IntegrationManifest[] | undefined => {
+  if (!value) return undefined
+  return value.map((manifest) => ({
+    ...manifest,
+    providerConstraints: { ...manifest.providerConstraints },
+    uiMetadata: { ...manifest.uiMetadata },
+    oauthMetadata: manifest.oauthMetadata
+      ? { scopes: [...manifest.oauthMetadata.scopes] }
+      : undefined
+  }))
+}
+
+const clonePersonalAuthMap = (
+  value?: Record<string, PersonalAuthStatus> | null
+): Record<string, PersonalAuthStatus> | undefined => {
+  if (!value) return undefined
+  return Object.entries(value).reduce(
+    (acc, [key, status]) => {
+      if (!status) return acc
+      acc[key] = { ...status }
+      return acc
+    },
+    {} as Record<string, PersonalAuthStatus>
+  )
+}
+
 const cloneSlackPersonalAuth = (
   value?: SlackPersonalAuthState | null
 ): SlackPersonalAuthState | undefined => {
@@ -132,7 +187,9 @@ const cloneGroupedSnapshot = (
 ): GroupedConnectionsSnapshot => ({
   personal: snapshot.personal.map((p) => ({ ...p })),
   workspace: snapshot.workspace.map((w) => ({ ...w })),
-  slackPersonalAuth: cloneSlackPersonalAuth(snapshot.slackPersonalAuth)
+  slackPersonalAuth: cloneSlackPersonalAuth(snapshot.slackPersonalAuth),
+  personalAuth: clonePersonalAuthMap(snapshot.personalAuth),
+  manifests: cloneManifests(snapshot.manifests)
 })
 
 const normalizeWorkspaceId = (value?: string | null): string | null => {
@@ -285,9 +342,56 @@ interface WorkspaceConnectionPayload {
   has_incoming_webhook?: boolean | null
 }
 
-type ProviderConnectionBuckets<T> = Partial<Record<OAuthProvider, T[] | null>>
+interface IntegrationManifestPayload {
+  integration_id?: string | null
+  integrationId?: string | null
+  auth_type?: string | null
+  authType?: string | null
+  token_scope?: string | null
+  tokenScope?: string | null
+  ownership_model?: string | null
+  ownershipModel?: string | null
+  provider_constraints?: {
+    workspace_first?: boolean | null
+    workspaceFirst?: boolean | null
+    single_install_per_workspace?: boolean | null
+    singleInstallPerWorkspace?: boolean | null
+  } | null
+  providerConstraints?: {
+    workspace_first?: boolean | null
+    workspaceFirst?: boolean | null
+    single_install_per_workspace?: boolean | null
+    singleInstallPerWorkspace?: boolean | null
+  } | null
+  ui_metadata?: {
+    display_name?: string | null
+    displayName?: string | null
+    description?: string | null
+    icon_key?: string | null
+    iconKey?: string | null
+    docs_url?: string | null
+    docsUrl?: string | null
+  } | null
+  uiMetadata?: {
+    display_name?: string | null
+    displayName?: string | null
+    description?: string | null
+    icon_key?: string | null
+    iconKey?: string | null
+    docs_url?: string | null
+    docsUrl?: string | null
+  } | null
+  oauth_metadata?: {
+    scopes?: string[] | null
+  } | null
+  oauthMetadata?: {
+    scopes?: string[] | null
+  } | null
+}
 
-interface SlackPersonalAuthPayload {
+type ProviderConnectionBuckets<T> = Partial<Record<string, T[] | null>>
+
+interface PersonalAuthPayload {
   has_personal_auth?: boolean | null
   hasPersonalAuth?: boolean | null
   personal_auth_connected_at?: string | null
@@ -304,7 +408,10 @@ interface ConnectionsApiResponse {
     | ProviderConnectionBuckets<WorkspaceConnectionPayload>
     | WorkspaceConnectionPayload[]
     | null
-  slack?: SlackPersonalAuthPayload | null
+  slack?: PersonalAuthPayload | null
+  personalAuth?: Record<string, PersonalAuthPayload> | null
+  personal_auth?: Record<string, PersonalAuthPayload> | null
+  manifests?: IntegrationManifestPayload[] | null
 }
 
 interface RefreshApiResponse {
@@ -317,22 +424,145 @@ interface RefreshApiResponse {
   message?: string | null
 }
 
-const resolveBucketEntries = <T extends { provider: OAuthProvider }>(
-  bucket: ProviderConnectionBuckets<T> | T[] | null | undefined,
-  provider: OAuthProvider
+const flattenBucketEntries = <T extends { provider?: OAuthProvider }>(
+  bucket: ProviderConnectionBuckets<T> | T[] | null | undefined
 ): T[] => {
   if (!bucket) {
     return []
   }
 
   if (Array.isArray(bucket)) {
-    return bucket.filter(
-      (entry) => !!entry && entry.provider === provider
-    ) as T[]
+    return bucket.filter(Boolean) as T[]
   }
 
-  const entries = bucket[provider]
-  return Array.isArray(entries) ? (entries as T[]).filter(Boolean) : []
+  const entries: T[] = []
+  Object.entries(bucket).forEach(([key, value]) => {
+    if (!Array.isArray(value)) {
+      return
+    }
+    value.forEach((entry) => {
+      if (!entry) return
+      if (entry.provider) {
+        entries.push(entry)
+      } else {
+        entries.push({ ...entry, provider: key as OAuthProvider })
+      }
+    })
+  })
+
+  return entries
+}
+
+const normalizeText = (value?: string | null): string | undefined => {
+  if (typeof value !== 'string') {
+    return undefined
+  }
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : undefined
+}
+
+const normalizeId = (value?: string | null): string | undefined => {
+  return normalizeText(value)
+}
+
+const normalizeScopes = (scopes?: string[] | null): string[] => {
+  if (!Array.isArray(scopes)) return []
+  return scopes
+    .filter((scope): scope is string => typeof scope === 'string')
+    .map((scope) => scope.trim())
+    .filter((scope) => scope.length > 0)
+}
+
+const normalizePersonalAuthStatus = (
+  payload?: PersonalAuthPayload | null
+): PersonalAuthStatus => {
+  const hasPersonalAuth = Boolean(
+    payload?.hasPersonalAuth ?? payload?.has_personal_auth
+  )
+  return {
+    hasPersonalAuth,
+    personalAuthConnectedAt: normalizeText(
+      payload?.personalAuthConnectedAt ?? payload?.personal_auth_connected_at
+    )
+  }
+}
+
+const normalizePersonalAuthMap = (
+  payload?: Record<string, PersonalAuthPayload> | null
+): Record<string, PersonalAuthStatus> | undefined => {
+  if (!payload || typeof payload !== 'object') {
+    return undefined
+  }
+  const entries = Object.entries(payload).reduce(
+    (acc, [key, value]) => {
+      const normalizedKey = normalizeText(key)
+      if (!normalizedKey) return acc
+      acc[normalizedKey] = normalizePersonalAuthStatus(value)
+      return acc
+    },
+    {} as Record<string, PersonalAuthStatus>
+  )
+  return Object.keys(entries).length > 0 ? entries : undefined
+}
+
+const normalizeManifestPayloads = (
+  payloads?: IntegrationManifestPayload[] | null
+): IntegrationManifest[] => {
+  if (!Array.isArray(payloads)) {
+    return []
+  }
+
+  const manifests: IntegrationManifest[] = []
+  payloads.forEach((payload) => {
+    const integrationId =
+      normalizeText(payload.integrationId ?? payload.integration_id) ?? ''
+    if (!integrationId) {
+      return
+    }
+
+    const providerConstraints =
+      payload.providerConstraints ?? payload.provider_constraints ?? {}
+    const uiMetadata = payload.uiMetadata ?? payload.ui_metadata ?? {}
+    const oauthMetadata = payload.oauthMetadata ?? payload.oauth_metadata
+
+    const displayName = normalizeText(
+      uiMetadata.displayName ?? uiMetadata.display_name
+    )
+
+    const manifest: IntegrationManifest = {
+      integrationId,
+      authType:
+        normalizeText(payload.authType ?? payload.auth_type) ?? 'oauth2',
+      tokenScope:
+        normalizeText(payload.tokenScope ?? payload.token_scope) ??
+        'personal_and_workspace',
+      ownershipModel:
+        normalizeText(payload.ownershipModel ?? payload.ownership_model) ??
+        'hybrid',
+      providerConstraints: {
+        workspaceFirst: Boolean(
+          providerConstraints.workspaceFirst ??
+            providerConstraints.workspace_first
+        ),
+        singleInstallPerWorkspace: Boolean(
+          providerConstraints.singleInstallPerWorkspace ??
+            providerConstraints.single_install_per_workspace
+        )
+      },
+      uiMetadata: {
+        displayName: displayName ?? integrationId,
+        description: normalizeText(uiMetadata.description) ?? 'Integration',
+        iconKey: normalizeText(uiMetadata.iconKey ?? uiMetadata.icon_key),
+        docsUrl: normalizeText(uiMetadata.docsUrl ?? uiMetadata.docs_url)
+      },
+      oauthMetadata: oauthMetadata
+        ? { scopes: normalizeScopes(oauthMetadata.scopes) }
+        : undefined
+    }
+    manifests.push(manifest)
+  })
+
+  return manifests
 }
 
 const ensureGrouped = (
@@ -344,7 +574,9 @@ const ensureGrouped = (
   workspace: Array.isArray(snapshot?.workspace)
     ? snapshot!.workspace.map((w) => ({ ...w }))
     : [],
-  slackPersonalAuth: cloneSlackPersonalAuth(snapshot?.slackPersonalAuth)
+  slackPersonalAuth: cloneSlackPersonalAuth(snapshot?.slackPersonalAuth),
+  personalAuth: clonePersonalAuthMap(snapshot?.personalAuth),
+  manifests: cloneManifests(snapshot?.manifests)
 })
 
 export async function fetchConnections(
@@ -367,16 +599,6 @@ export async function fetchConnections(
     workspace: []
   }
 
-  const normalize = (value?: string | null): string | undefined => {
-    if (typeof value !== 'string') {
-      return undefined
-    }
-    const trimmed = value.trim()
-    return trimmed.length > 0 ? trimmed : undefined
-  }
-  const normalizeId = (value?: string | null): string | undefined => {
-    return normalize(value)
-  }
   const resolveConnectionId = (entry?: {
     id?: string | null
     connection_id?: string | null
@@ -402,113 +624,108 @@ export async function fetchConnections(
     )
   }
 
-  const normalizeSlackPersonalAuth = (
-    payload?: SlackPersonalAuthPayload | null
-  ): SlackPersonalAuthState => {
-    const hasPersonalAuth = Boolean(
-      payload?.hasPersonalAuth ?? payload?.has_personal_auth
-    )
-    const connectedAt = normalize(
-      payload?.personalAuthConnectedAt ?? payload?.personal_auth_connected_at
-    )
-    return {
-      hasPersonalAuth,
-      personalAuthConnectedAt: connectedAt
+  const personalEntries = flattenBucketEntries(data.personal)
+  personalEntries.forEach((entry) => {
+    if (!entry || !entry.provider) {
+      return
     }
-  }
-
-  const personalBuckets = data.personal
-  PROVIDER_KEYS.forEach((provider) => {
-    const entries = resolveBucketEntries(personalBuckets, provider)
-    entries.forEach((entry) => {
-      if (!entry) {
-        return
-      }
-      const requiresReconnect = Boolean(
-        entry.requiresReconnect ?? entry.requires_reconnect
-      )
-      const connectionId =
-        resolveConnectionId(entry) ?? resolveWorkspaceConnectionId(entry)
-      const connected =
-        typeof entry.connected === 'boolean'
-          ? entry.connected
-          : !requiresReconnect
-      grouped.personal.push({
-        scope: 'personal',
-        provider,
-        id: connectionId ?? entry.id ?? null,
-        connectionId: connectionId,
-        connected,
-        accountEmail: normalize(entry.accountEmail),
-        expiresAt: entry.expiresAt ?? undefined,
-        lastRefreshedAt: normalize(entry.lastRefreshedAt),
-        requiresReconnect,
-        isShared: Boolean(entry.isShared),
-        ownerUserId: normalizeId(entry.owner?.userId),
-        ownerName: normalize(entry.owner?.name),
-        ownerEmail: normalize(entry.owner?.email)
-      })
+    const requiresReconnect = Boolean(
+      entry.requiresReconnect ?? entry.requires_reconnect
+    )
+    const connectionId =
+      resolveConnectionId(entry) ?? resolveWorkspaceConnectionId(entry)
+    const connected =
+      typeof entry.connected === 'boolean'
+        ? entry.connected
+        : !requiresReconnect
+    grouped.personal.push({
+      scope: 'personal',
+      provider: entry.provider,
+      id: connectionId ?? entry.id ?? null,
+      connectionId: connectionId,
+      connected,
+      accountEmail: normalizeText(entry.accountEmail),
+      expiresAt: entry.expiresAt ?? undefined,
+      lastRefreshedAt: normalizeText(entry.lastRefreshedAt),
+      requiresReconnect,
+      isShared: Boolean(entry.isShared),
+      ownerUserId: normalizeId(entry.owner?.userId),
+      ownerName: normalizeText(entry.owner?.name),
+      ownerEmail: normalizeText(entry.owner?.email)
     })
   })
 
-  const workspaceBuckets = data.workspace
-  PROVIDER_KEYS.forEach((provider) => {
-    const entries = resolveBucketEntries(workspaceBuckets, provider)
-    entries.forEach((entry) => {
-      if (!entry) {
-        return
-      }
+  const workspaceEntries = flattenBucketEntries(data.workspace)
+  workspaceEntries.forEach((entry) => {
+    if (!entry || !entry.provider) {
+      return
+    }
 
-      const connectionId = resolveConnectionId(entry)
-      const workspaceConnectionId =
-        resolveWorkspaceConnectionId(entry) ?? connectionId
-      const workspaceId = entry.workspaceId?.trim()
-      if (!workspaceConnectionId || !workspaceId) {
-        return
-      }
+    const connectionId = resolveConnectionId(entry)
+    const workspaceConnectionId =
+      resolveWorkspaceConnectionId(entry) ?? connectionId
+    const workspaceId = entry.workspaceId?.trim()
+    if (!workspaceConnectionId || !workspaceId) {
+      return
+    }
 
-      const requiresReconnect = Boolean(
-        entry.requiresReconnect ?? entry.requires_reconnect
+    const requiresReconnect = Boolean(
+      entry.requiresReconnect ?? entry.requires_reconnect
+    )
+    const connected =
+      typeof entry.connected === 'boolean'
+        ? entry.connected
+        : !requiresReconnect
+
+    const ownerName =
+      normalizeText(entry.sharedByName) ?? normalizeText(entry.owner?.name)
+    const ownerEmail =
+      normalizeText(entry.sharedByEmail) ?? normalizeText(entry.owner?.email)
+
+    const workspaceInfo: WorkspaceConnectionInfo = {
+      scope: 'workspace',
+      id: workspaceConnectionId,
+      workspaceConnectionId,
+      connectionId: connectionId ?? workspaceConnectionId,
+      connected,
+      provider: entry.provider,
+      accountEmail: normalizeText(entry.accountEmail),
+      expiresAt: entry.expiresAt ?? undefined,
+      lastRefreshedAt: normalizeText(entry.lastRefreshedAt),
+      workspaceId,
+      workspaceName:
+        normalizeText(entry.workspaceName) ?? 'Workspace connection',
+      sharedByName: ownerName,
+      sharedByEmail: ownerEmail,
+      requiresReconnect,
+      ownerUserId: normalizeId(entry.owner?.userId),
+      hasIncomingWebhook: Boolean(
+        entry.hasIncomingWebhook ?? entry.has_incoming_webhook
       )
-      const connected =
-        typeof entry.connected === 'boolean'
-          ? entry.connected
-          : !requiresReconnect
+    }
 
-      const ownerName =
-        normalize(entry.sharedByName) ?? normalize(entry.owner?.name)
-      const ownerEmail =
-        normalize(entry.sharedByEmail) ?? normalize(entry.owner?.email)
-
-      const workspaceInfo: WorkspaceConnectionInfo = {
-        scope: 'workspace',
-        id: workspaceConnectionId,
-        workspaceConnectionId,
-        connectionId: connectionId ?? workspaceConnectionId,
-        connected,
-        provider,
-        accountEmail: normalize(entry.accountEmail),
-        expiresAt: entry.expiresAt ?? undefined,
-        lastRefreshedAt: normalize(entry.lastRefreshedAt),
-        workspaceId,
-        workspaceName: normalize(entry.workspaceName) ?? 'Workspace connection',
-        sharedByName: ownerName,
-        sharedByEmail: ownerEmail,
-        requiresReconnect,
-        ownerUserId: normalizeId(entry.owner?.userId),
-        hasIncomingWebhook: Boolean(
-          entry.hasIncomingWebhook ?? entry.has_incoming_webhook
-        )
-      }
-
-      grouped.workspace.push(workspaceInfo)
-    })
+    grouped.workspace.push(workspaceInfo)
   })
 
-  grouped.slackPersonalAuth = normalizeSlackPersonalAuth(data.slack)
+  grouped.slackPersonalAuth = normalizePersonalAuthStatus(data.slack)
+  grouped.personalAuth = normalizePersonalAuthMap(
+    data.personalAuth ?? data.personal_auth
+  )
+  grouped.manifests = normalizeManifestPayloads(data.manifests)
 
   setCachedConnections(grouped, { workspaceId: targetWorkspace })
   return grouped
+}
+
+export async function fetchIntegrationManifests(
+  options?: ConnectionCacheOptions
+): Promise<IntegrationManifest[]> {
+  const cached = getCachedConnections(options?.workspaceId)
+  if (cached?.manifests && cached.manifests.length > 0) {
+    return cloneManifests(cached.manifests) ?? []
+  }
+  const data = await fetchConnections(options)
+  return cloneManifests(data.manifests) ?? []
 }
 
 export async function disconnectProvider(
@@ -636,7 +853,9 @@ export const clearProviderConnections = (provider: OAuthProvider) => {
     return {
       personal: nextPersonal,
       workspace: nextWorkspace,
-      slackPersonalAuth: snapshot.slackPersonalAuth
+      slackPersonalAuth: snapshot.slackPersonalAuth,
+      personalAuth: snapshot.personalAuth,
+      manifests: snapshot.manifests
     }
   })
 }
@@ -692,7 +911,9 @@ export const markProviderRevoked = (
     return {
       personal: nextPersonal,
       workspace: nextWorkspace,
-      slackPersonalAuth: snapshot.slackPersonalAuth
+      slackPersonalAuth: snapshot.slackPersonalAuth,
+      personalAuth: snapshot.personalAuth,
+      manifests: snapshot.manifests
     }
   })
 }
@@ -766,54 +987,5 @@ export async function promoteConnection({
   return {
     workspaceConnectionId,
     createdBy
-  }
-}
-
-// Slack OAuth is workspace-first and must be initiated explicitly.
-// Slack is intentionally excluded from generic OAuth helpers.
-
-export function startSlackWorkspaceInstall(workspaceId: string): void {
-  if (!workspaceId || workspaceId.trim() === '') {
-    throw new Error('workspaceId is required for Slack workspace installation')
-  }
-
-  const url = new URL(buildApiUrl('/api/oauth/slack/start'))
-  url.searchParams.set('workspace', workspaceId.trim())
-  window.location.href = url.toString()
-}
-
-export function startSlackPersonalAuthorization(
-  workspaceId: string,
-  workspaceConnectionId: string
-): void {
-  console.error(
-    'startSlackPersonalAuthorization CALLED',
-    workspaceId,
-    workspaceConnectionId
-  )
-
-  if (!workspaceId || workspaceId.trim() === '') {
-    throw new Error('workspaceId is required for Slack personal authorization')
-  }
-  if (!workspaceConnectionId || workspaceConnectionId.trim() === '') {
-    throw new Error(
-      'workspaceConnectionId is required for Slack personal authorization'
-    )
-  }
-
-  const url = new URL(buildApiUrl('/api/oauth/slack/start'))
-  url.searchParams.set('workspace', workspaceId.trim())
-  url.searchParams.set('workspaceConnectionId', workspaceConnectionId.trim())
-  window.location.href = url.toString()
-}
-
-export function assertProviderNotSlack(
-  provider: OAuthProvider,
-  context: string
-): void {
-  if (provider === 'slack') {
-    throw new Error(
-      `Slack OAuth must use explicit helpers. Generic OAuth is forbidden. Context: ${context}`
-    )
   }
 }

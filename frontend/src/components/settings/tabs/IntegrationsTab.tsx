@@ -2,17 +2,12 @@ import { JSX, useCallback, useEffect, useMemo, useState } from 'react'
 import { ChevronDown, MoreVertical } from 'lucide-react'
 
 import SlackIcon from '@/assets/svg-components/third-party/SlackIcon'
-import { API_BASE_URL } from '@/lib/config'
 import { errorMessage } from '@/lib/errorMessage'
 import AsanaIcon from '@/assets/svg-components/third-party/AsanaIcon'
+import { API_BASE_URL } from '@/lib/config'
 import {
   OAuthProvider,
   WorkspaceConnectionInfo,
-  SLACK_PERSONAL_AUTHORIZE_LABEL,
-  SLACK_PERSONAL_AUTHORIZED_HINT,
-  SLACK_PERSONAL_AUTHORIZED_LABEL,
-  SLACK_PERSONAL_AUTH_REQUIRED,
-  SLACK_PERSONAL_REAUTHORIZE_LABEL,
   disconnectProvider,
   fetchConnections,
   refreshProvider,
@@ -20,8 +15,9 @@ import {
   unshareWorkspaceConnection,
   setCachedConnections,
   type GroupedConnectionsSnapshot,
-  type PersonalConnectionRecord,
-  startSlackPersonalAuthorization
+  type IntegrationManifest,
+  type PersonalAuthStatus,
+  type PersonalConnectionRecord
 } from '@/lib/oauthApi'
 import { selectCurrentWorkspace, useAuth } from '@/stores/auth'
 import { normalizePlanTier, type PlanTier } from '@/lib/planTiers'
@@ -40,15 +36,8 @@ interface IntegrationsTabProps {
   onDismissNotice?: () => void
 }
 
-interface ProviderMeta {
-  key: OAuthProvider
-  name: string
-  description: string
-  scopes: string
-}
-
-const PROVIDER_ICONS: Partial<
-  Record<OAuthProvider, (props: React.SVGProps<SVGSVGElement>) => JSX.Element>
+const ICON_BY_KEY: Partial<
+  Record<string, (props: React.SVGProps<SVGSVGElement>) => JSX.Element>
 > = {
   slack: SlackIcon,
   google: GoogleIcon,
@@ -57,37 +46,177 @@ const PROVIDER_ICONS: Partial<
   notion: NotionIcon
 }
 
-const PROVIDERS: ProviderMeta[] = [
+const DEFAULT_MANIFESTS: IntegrationManifest[] = [
   {
-    key: 'google',
-    name: 'Google',
-    description:
-      'Connect your Google Workspace account to enable actions that call Gmail, Calendar, and other Google APIs on your behalf.',
-    scopes:
-      'openid email profile userinfo ./auth/drive.file ./auth/spreadsheets'
+    integrationId: 'google',
+    authType: 'oauth2',
+    tokenScope: 'personal_and_workspace',
+    ownershipModel: 'hybrid',
+    providerConstraints: {
+      workspaceFirst: false,
+      singleInstallPerWorkspace: false
+    },
+    uiMetadata: {
+      displayName: 'Google',
+      description:
+        'Connect your Google Workspace account to enable actions that call Gmail, Calendar, and other Google APIs on your behalf.',
+      iconKey: 'google'
+    },
+    oauthMetadata: {
+      scopes: [
+        'openid',
+        'email',
+        'profile',
+        'userinfo',
+        './auth/drive.file',
+        './auth/spreadsheets'
+      ]
+    }
   },
   {
-    key: 'slack',
-    name: 'Slack',
-    description:
-      'Connect your Slack workspace to post messages, manage channels, and automate collaboration from DSentr workflows.',
-    scopes: 'chat:write channels:read users:read'
+    integrationId: 'slack',
+    authType: 'oauth2',
+    tokenScope: 'personal_and_workspace',
+    ownershipModel: 'hybrid',
+    providerConstraints: {
+      workspaceFirst: true,
+      singleInstallPerWorkspace: true
+    },
+    uiMetadata: {
+      displayName: 'Slack',
+      description:
+        'Connect your Slack workspace to post messages, manage channels, and automate collaboration from DSentr workflows.',
+      iconKey: 'slack'
+    },
+    oauthMetadata: {
+      scopes: ['chat:write', 'channels:read', 'users:read']
+    }
   },
   {
-    key: 'asana',
-    name: 'Asana',
-    description:
-      'Connect Asana to create and update projects, tasks, and comments directly from your workflows.',
-    scopes: 'default email'
+    integrationId: 'asana',
+    authType: 'oauth2',
+    tokenScope: 'personal_and_workspace',
+    ownershipModel: 'hybrid',
+    providerConstraints: {
+      workspaceFirst: false,
+      singleInstallPerWorkspace: false
+    },
+    uiMetadata: {
+      displayName: 'Asana',
+      description:
+        'Connect Asana to create and update projects, tasks, and comments directly from your workflows.',
+      iconKey: 'asana'
+    },
+    oauthMetadata: {
+      scopes: ['default', 'email']
+    }
   },
   {
-    key: 'notion',
-    name: 'Notion',
-    description:
-      'Connect Notion to create, update, and query databases and pages from DSentr workflows.',
-    scopes: 'read write'
+    integrationId: 'notion',
+    authType: 'oauth2',
+    tokenScope: 'personal_and_workspace',
+    ownershipModel: 'hybrid',
+    providerConstraints: {
+      workspaceFirst: false,
+      singleInstallPerWorkspace: false
+    },
+    uiMetadata: {
+      displayName: 'Notion',
+      description:
+        'Connect Notion to create, update, and query databases and pages from DSentr workflows.',
+      iconKey: 'notion'
+    },
+    oauthMetadata: {
+      scopes: ['read', 'write']
+    }
   }
 ]
+
+const DEFAULT_MANIFESTS_BY_ID = new Map(
+  DEFAULT_MANIFESTS.map((manifest) => [manifest.integrationId, manifest])
+)
+const DEFAULT_MANIFEST_IDS = new Set(
+  DEFAULT_MANIFESTS.map((manifest) => manifest.integrationId)
+)
+
+const normalizeScopes = (scopes?: string[] | null): string[] => {
+  if (!Array.isArray(scopes)) return []
+  return scopes
+    .filter((scope): scope is string => typeof scope === 'string')
+    .map((scope) => scope.trim())
+    .filter((scope) => scope.length > 0)
+}
+
+const mergeManifestDefaults = (
+  manifest: IntegrationManifest
+): IntegrationManifest => {
+  const fallback = DEFAULT_MANIFESTS_BY_ID.get(manifest.integrationId)
+  if (!fallback) {
+    return {
+      ...manifest,
+      providerConstraints: { ...manifest.providerConstraints },
+      uiMetadata: { ...manifest.uiMetadata },
+      oauthMetadata: manifest.oauthMetadata
+        ? { scopes: normalizeScopes(manifest.oauthMetadata.scopes) }
+        : undefined
+    }
+  }
+
+  const mergedScopes = normalizeScopes(manifest.oauthMetadata?.scopes)
+  const fallbackScopes = normalizeScopes(fallback.oauthMetadata?.scopes)
+
+  return {
+    ...fallback,
+    ...manifest,
+    providerConstraints: {
+      ...fallback.providerConstraints,
+      ...manifest.providerConstraints
+    },
+    uiMetadata: {
+      ...fallback.uiMetadata,
+      ...manifest.uiMetadata
+    },
+    oauthMetadata: manifest.oauthMetadata
+      ? {
+          scopes: mergedScopes.length > 0 ? mergedScopes : fallbackScopes
+        }
+      : fallback.oauthMetadata
+        ? {
+            scopes: fallbackScopes
+          }
+        : undefined
+  }
+}
+
+const supportsPersonal = (manifest: IntegrationManifest): boolean => {
+  const tokenSupportsPersonal =
+    manifest.tokenScope === 'personal' ||
+    manifest.tokenScope === 'personal_and_workspace'
+  const ownershipSupportsPersonal =
+    manifest.ownershipModel === 'personal_only' ||
+    manifest.ownershipModel === 'hybrid'
+  return tokenSupportsPersonal && ownershipSupportsPersonal
+}
+
+const supportsWorkspace = (manifest: IntegrationManifest): boolean => {
+  const tokenSupportsWorkspace =
+    manifest.tokenScope === 'workspace' ||
+    manifest.tokenScope === 'personal_and_workspace'
+  const ownershipSupportsWorkspace =
+    manifest.ownershipModel === 'workspace_only' ||
+    manifest.ownershipModel === 'hybrid'
+  return tokenSupportsWorkspace && ownershipSupportsWorkspace
+}
+
+const isWorkspaceFirst = (manifest: IntegrationManifest): boolean =>
+  Boolean(manifest.providerConstraints.workspaceFirst) &&
+  supportsPersonal(manifest) &&
+  supportsWorkspace(manifest)
+
+const formatScopesLabel = (manifest: IntegrationManifest): string => {
+  const scopes = normalizeScopes(manifest.oauthMetadata?.scopes)
+  return scopes.length > 0 ? scopes.join(' ') : 'None'
+}
 
 export default function IntegrationsTab({
   notice,
@@ -103,14 +232,16 @@ export default function IntegrationsTab({
   const [connections, setConnections] =
     useState<GroupedConnectionsSnapshot | null>(null)
   const [providerQuery, setProviderQuery] = useState('')
-  const [busyProvider, setBusyProvider] = useState<OAuthProvider | null>(null)
+  const [busyProvider, setBusyProvider] = useState<string | null>(null)
   const [busyConnectionId, setBusyConnectionId] = useState<string | null>(null)
-  const [connectingProvider, setConnectingProvider] =
-    useState<OAuthProvider | null>(null)
+  const [connectingProvider, setConnectingProvider] = useState<string | null>(
+    null
+  )
   const [promoteDialogConnection, setPromoteDialogConnection] =
     useState<PersonalConnectionRecord | null>(null)
-  const [promoteBusyProvider, setPromoteBusyProvider] =
-    useState<OAuthProvider | null>(null)
+  const [promoteBusyProvider, setPromoteBusyProvider] = useState<string | null>(
+    null
+  )
   const [removeDialog, setRemoveDialog] =
     useState<WorkspaceConnectionInfo | null>(null)
   const [removeBusyId, setRemoveBusyId] = useState<string | null>(null)
@@ -118,30 +249,60 @@ export default function IntegrationsTab({
     connection: PersonalConnectionRecord
     sharedConnections: WorkspaceConnectionInfo[]
   } | null>(null)
-  const [expandedProviders, setExpandedProviders] = useState<
-    Record<OAuthProvider, boolean>
-  >(() =>
-    PROVIDERS.reduce(
-      (acc, provider) => {
-        acc[provider.key] = false
-        return acc
-      },
-      {} as Record<OAuthProvider, boolean>
+  const manifestList = useMemo(() => {
+    const manifestById = new Map(
+      DEFAULT_MANIFESTS.map((manifest) => [
+        manifest.integrationId,
+        mergeManifestDefaults(manifest)
+      ])
     )
-  )
+    ;(connections?.manifests ?? []).forEach((manifest) => {
+      if (!DEFAULT_MANIFEST_IDS.has(manifest.integrationId)) {
+        return
+      }
+      manifestById.set(manifest.integrationId, mergeManifestDefaults(manifest))
+    })
 
+    return Array.from(manifestById.values()).filter(
+      (manifest) => manifest.authType === 'oauth2'
+    )
+  }, [connections?.manifests])
+  const [expandedProviders, setExpandedProviders] = useState<
+    Record<string, boolean>
+  >({})
   const sortedProviders = useMemo(() => {
     const term = providerQuery.trim().toLowerCase()
-    const ordered = [...PROVIDERS].sort((a, b) => a.name.localeCompare(b.name))
+    const ordered = [...manifestList].sort((a, b) =>
+      a.uiMetadata.displayName.localeCompare(b.uiMetadata.displayName)
+    )
     if (!term) {
       return ordered
     }
-    return ordered.filter(
-      (provider) =>
-        provider.name.toLowerCase().includes(term) ||
-        provider.description.toLowerCase().includes(term)
-    )
-  }, [providerQuery])
+    return ordered.filter((manifest) => {
+      const name = manifest.uiMetadata.displayName.toLowerCase()
+      const description = manifest.uiMetadata.description.toLowerCase()
+      return (
+        name.includes(term) ||
+        description.includes(term) ||
+        manifest.integrationId.toLowerCase().includes(term)
+      )
+    })
+  }, [manifestList, providerQuery])
+  useEffect(() => {
+    setExpandedProviders((prev) => {
+      let changed = false
+      const next = { ...prev }
+      manifestList.forEach((manifest) => {
+        if (
+          !Object.prototype.hasOwnProperty.call(next, manifest.integrationId)
+        ) {
+          next[manifest.integrationId] = false
+          changed = true
+        }
+      })
+      return changed ? next : prev
+    })
+  }, [manifestList])
 
   const planTier = useMemo<PlanTier>((): PlanTier => {
     return normalizePlanTier(
@@ -157,7 +318,32 @@ export default function IntegrationsTab({
       value ? { ...value } : undefined,
     []
   )
-  const formatSlackAuthTimestamp = useCallback((value?: string | null) => {
+  const clonePersonalAuth = useCallback(
+    (value?: Record<string, PersonalAuthStatus> | null) => {
+      if (!value) return undefined
+      return Object.entries(value).reduce(
+        (acc, [key, status]) => {
+          if (!status) return acc
+          acc[key] = { ...status }
+          return acc
+        },
+        {} as Record<string, PersonalAuthStatus>
+      )
+    },
+    []
+  )
+  const cloneManifests = useCallback((value?: IntegrationManifest[] | null) => {
+    if (!value) return undefined
+    return value.map((manifest) => ({
+      ...manifest,
+      providerConstraints: { ...manifest.providerConstraints },
+      uiMetadata: { ...manifest.uiMetadata },
+      oauthMetadata: manifest.oauthMetadata
+        ? { scopes: [...manifest.oauthMetadata.scopes] }
+        : undefined
+    }))
+  }, [])
+  const formatPersonalAuthTimestamp = useCallback((value?: string | null) => {
     if (!value) return null
     const parsed = new Date(value)
     if (Number.isNaN(parsed.getTime())) {
@@ -181,10 +367,35 @@ export default function IntegrationsTab({
     },
     []
   )
-  const slackPersonalAuth = connections?.slackPersonalAuth
-  const hasSlackPersonalAuth = Boolean(slackPersonalAuth?.hasPersonalAuth)
-  const slackPersonalConnectedAt = formatSlackAuthTimestamp(
-    slackPersonalAuth?.personalAuthConnectedAt
+  const integrationNames = useMemo(() => {
+    const entries = new Map<string, string>()
+    manifestList.forEach((manifest) => {
+      entries.set(manifest.integrationId, manifest.uiMetadata.displayName)
+    })
+    return entries
+  }, [manifestList])
+  const resolveIntegrationName = useCallback(
+    (integrationId?: string | null) => {
+      if (!integrationId) return 'Integration'
+      const name = integrationNames.get(integrationId)
+      if (name) return name
+      return integrationId.length > 0
+        ? integrationId[0].toUpperCase() + integrationId.slice(1)
+        : 'Integration'
+    },
+    [integrationNames]
+  )
+  const resolvePersonalAuthStatus = useCallback(
+    (integrationId: string, workspaceFirst: boolean) => {
+      if (!workspaceFirst) return null
+      const fromMap = connections?.personalAuth?.[integrationId]
+      if (fromMap) return { ...fromMap }
+      if (!connections?.personalAuth && connections?.slackPersonalAuth) {
+        return { ...connections.slackPersonalAuth }
+      }
+      return null
+    },
+    [connections?.personalAuth, connections?.slackPersonalAuth]
   )
 
   const openPlanSettings = useCallback(() => {
@@ -217,7 +428,9 @@ export default function IntegrationsTab({
         setConnections({
           personal: data.personal.map((p) => ({ ...p })),
           workspace: data.workspace.map((w) => ({ ...w })),
-          slackPersonalAuth: cloneSlackPersonalAuth(data.slackPersonalAuth)
+          slackPersonalAuth: cloneSlackPersonalAuth(data.slackPersonalAuth),
+          personalAuth: clonePersonalAuth(data.personalAuth),
+          manifests: cloneManifests(data.manifests)
         })
         setError(null)
       } catch (err) {
@@ -235,23 +448,25 @@ export default function IntegrationsTab({
     return () => {
       active = false
     }
-  }, [workspaceId, isSoloPlan, cloneSlackPersonalAuth])
+  }, [
+    workspaceId,
+    isSoloPlan,
+    cloneSlackPersonalAuth,
+    clonePersonalAuth,
+    cloneManifests
+  ])
 
   const noticeText = useMemo(() => {
     if (!notice) return null
     if (notice.kind === 'connected') {
-      const providerName =
-        PROVIDERS.find((p) => p.key === notice.provider)?.name ?? 'Integration'
-      return `${providerName} is now connected.`
+      const integrationName = resolveIntegrationName(notice.provider ?? null)
+      return `${integrationName} is now connected.`
     }
-    const providerName = notice.provider
-      ? (PROVIDERS.find((p) => p.key === notice.provider)?.name ??
-        'Integration')
-      : 'Integration'
+    const integrationName = resolveIntegrationName(notice.provider ?? null)
     return notice.message
-      ? `${providerName}: ${notice.message}`
-      : `${providerName} failed to connect.`
-  }, [notice])
+      ? `${integrationName}: ${notice.message}`
+      : `${integrationName} failed to connect.`
+  }, [notice, resolveIntegrationName])
 
   const requestWorkflowSave = useCallback(async () => {
     if (!workflowIsDirty) return true
@@ -277,12 +492,18 @@ export default function IntegrationsTab({
     })
   }, [workflowIsDirty])
 
-  const handleConnect = useCallback(
-    async (provider: OAuthProvider, opts?: { slackPersonal?: boolean }) => {
+  const startIntegrationConnect = useCallback(
+    async (
+      integrationId: string,
+      options?: {
+        workspaceId?: string | null
+        workspaceConnectionId?: string | null
+      }
+    ) => {
       if (isSoloPlan || isViewer || connectingProvider) {
         return
       }
-      setConnectingProvider(provider)
+      setConnectingProvider(integrationId)
       try {
         const saved = await requestWorkflowSave()
         if (!saved) {
@@ -291,56 +512,64 @@ export default function IntegrationsTab({
           )
           return
         }
-        const url = new URL(`${API_BASE_URL}/api/oauth/${provider}/start`)
-        // For Slack we support workspace-first installs. Pass workspace param
-        // only when performing workspace install. For explicit personal Slack
-        // authorizations (opts?.slackPersonal), do NOT include workspace.
-        if (workspaceId && !(provider === 'slack' && opts?.slackPersonal)) {
-          url.searchParams.set('workspace', workspaceId)
+        const url = new URL(`${API_BASE_URL}/api/oauth/${integrationId}/start`)
+        if (options?.workspaceId) {
+          url.searchParams.set('workspace', options.workspaceId)
+        }
+        if (options?.workspaceConnectionId) {
+          url.searchParams.set(
+            'workspace_connection_id',
+            options.workspaceConnectionId
+          )
         }
         window.location.href = url.toString()
       } finally {
         setConnectingProvider(null)
       }
     },
+    [isSoloPlan, isViewer, connectingProvider, requestWorkflowSave, setError]
+  )
+
+  const handleWorkspaceFirstPersonalAuth = useCallback(
+    (
+      manifest: IntegrationManifest,
+      workspaceConnections: WorkspaceConnectionInfo[]
+    ) => {
+      if (isSoloPlan || isViewer || connectingProvider) return
+      const integrationName = resolveIntegrationName(manifest.integrationId)
+      if (!workspaceId) {
+        setError(
+          `Select a workspace before authorizing ${integrationName} for yourself.`
+        )
+        return
+      }
+
+      const workspaceConnectionId = workspaceConnections
+        .map((entry) => entry.id ?? entry.workspaceConnectionId ?? null)
+        .find((value): value is string => Boolean(value))
+
+      if (!workspaceConnectionId) {
+        setError(`${integrationName} workspace connection not found.`)
+        return
+      }
+
+      void startIntegrationConnect(manifest.integrationId, {
+        workspaceId,
+        workspaceConnectionId
+      })
+    },
     [
       isSoloPlan,
       isViewer,
       connectingProvider,
-      requestWorkflowSave,
+      resolveIntegrationName,
       workspaceId,
-      setError
+      setError,
+      startIntegrationConnect
     ]
   )
 
-  const handleSlackAuthorizeSelf = useCallback(() => {
-    if (isSoloPlan || isViewer || connectingProvider) return
-
-    if (!workspaceId) {
-      setError('Select a workspace before authorizing Slack for yourself.')
-      return
-    }
-
-    const ws = (connections?.workspace ?? []).find(
-      (c) => c.provider === 'slack'
-    )
-
-    if (!ws?.id) {
-      setError('Slack workspace connection not found.')
-      return
-    }
-
-    startSlackPersonalAuthorization(workspaceId, ws.id)
-  }, [
-    isSoloPlan,
-    isViewer,
-    connectingProvider,
-    workspaceId,
-    connections,
-    setError
-  ])
-
-  const toggleProvider = useCallback((providerKey: OAuthProvider) => {
+  const toggleProvider = useCallback((providerKey: string) => {
     setExpandedProviders((prev) => ({
       ...prev,
       [providerKey]: !(prev?.[providerKey] ?? true)
@@ -388,7 +617,9 @@ export default function IntegrationsTab({
           const next: GroupedConnectionsSnapshot = {
             personal: nextPersonal,
             workspace: nextWorkspace,
-            slackPersonalAuth: cloneSlackPersonalAuth(prev?.slackPersonalAuth)
+            slackPersonalAuth: cloneSlackPersonalAuth(prev?.slackPersonalAuth),
+            personalAuth: clonePersonalAuth(prev?.personalAuth),
+            manifests: cloneManifests(prev?.manifests)
           }
           setCachedConnections(next, { workspaceId })
           return next
@@ -405,7 +636,14 @@ export default function IntegrationsTab({
         setBusyConnectionId(null)
       }
     },
-    [removeBusyId, resolveConnectionKey, workspaceId, cloneSlackPersonalAuth]
+    [
+      removeBusyId,
+      resolveConnectionKey,
+      workspaceId,
+      cloneSlackPersonalAuth,
+      clonePersonalAuth,
+      cloneManifests
+    ]
   )
 
   const handleDisconnect = useCallback(
@@ -436,7 +674,7 @@ export default function IntegrationsTab({
 
   const handleRefresh = useCallback(
     async (
-      provider: OAuthProvider,
+      integrationId: string,
       target?: PersonalConnectionRecord | WorkspaceConnectionInfo
     ) => {
       const connectionKey = resolveConnectionKey(target)
@@ -444,10 +682,13 @@ export default function IntegrationsTab({
         setError('Select a connection with an ID before refreshing.')
         return
       }
-      setBusyProvider(provider)
+      setBusyProvider(integrationId)
       setBusyConnectionId(connectionKey)
       try {
-        const updated = await refreshProvider(provider, connectionKey)
+        const updated = await refreshProvider(
+          integrationId as OAuthProvider,
+          connectionKey
+        )
         setConnections((prev) => {
           const mapConnection = <
             T extends { provider: OAuthProvider } & {
@@ -458,7 +699,7 @@ export default function IntegrationsTab({
             entries: T[]
           ): T[] =>
             entries.map((entry) => {
-              if (entry.provider !== provider) return { ...entry }
+              if (entry.provider !== integrationId) return { ...entry }
               const entryKey = resolveConnectionKey(entry)
               if (connectionKey && entryKey !== connectionKey) {
                 return { ...entry }
@@ -485,7 +726,9 @@ export default function IntegrationsTab({
           const next: GroupedConnectionsSnapshot = {
             personal: nextPersonal,
             workspace: nextWorkspace,
-            slackPersonalAuth: cloneSlackPersonalAuth(prev?.slackPersonalAuth)
+            slackPersonalAuth: cloneSlackPersonalAuth(prev?.slackPersonalAuth),
+            personalAuth: clonePersonalAuth(prev?.personalAuth),
+            manifests: cloneManifests(prev?.manifests)
           }
           setCachedConnections(next, { workspaceId })
           return next
@@ -496,7 +739,7 @@ export default function IntegrationsTab({
         if (requiresReconnect) {
           setConnections((prev) => {
             const nextPersonal = (prev?.personal ?? []).map((p) => {
-              if (p.provider !== provider) return { ...p }
+              if (p.provider !== integrationId) return { ...p }
               const entryKey = resolveConnectionKey(p)
               if (connectionKey && entryKey !== connectionKey) {
                 return { ...p }
@@ -509,14 +752,18 @@ export default function IntegrationsTab({
               }
             })
             const nextWorkspace = (prev?.workspace ?? []).filter((w) => {
-              if (w.provider !== provider) return true
+              if (w.provider !== integrationId) return true
               const entryKey = resolveConnectionKey(w)
               return entryKey !== null && entryKey !== connectionKey
             })
             const next: GroupedConnectionsSnapshot = {
               personal: nextPersonal,
               workspace: nextWorkspace,
-              slackPersonalAuth: cloneSlackPersonalAuth(prev?.slackPersonalAuth)
+              slackPersonalAuth: cloneSlackPersonalAuth(
+                prev?.slackPersonalAuth
+              ),
+              personalAuth: clonePersonalAuth(prev?.personalAuth),
+              manifests: cloneManifests(prev?.manifests)
             }
             setCachedConnections(next, { workspaceId })
             return next
@@ -536,7 +783,13 @@ export default function IntegrationsTab({
         setBusyConnectionId(null)
       }
     },
-    [resolveConnectionKey, workspaceId, cloneSlackPersonalAuth]
+    [
+      resolveConnectionKey,
+      workspaceId,
+      cloneSlackPersonalAuth,
+      clonePersonalAuth,
+      cloneManifests
+    ]
   )
 
   return (
@@ -557,7 +810,7 @@ export default function IntegrationsTab({
           <div className="flex items-start justify-between gap-2">
             <span>
               OAuth integrations are available on workspace plans and above.
-              Upgrade in Settings â†’ Plan to connect accounts for workflows.
+              Upgrade in Settings {'>'} Plan to connect accounts for workflows.
             </span>
             <button
               type="button"
@@ -627,18 +880,46 @@ export default function IntegrationsTab({
               No providers match your search.
             </div>
           ) : (
-            sortedProviders.map((provider) => {
-              let personalConnections = (connections?.personal ?? []).filter(
-                (entry) => entry.provider === provider.key
+            sortedProviders.map((manifest) => {
+              const integrationId = manifest.integrationId
+              const displayName = manifest.uiMetadata.displayName
+              const description = manifest.uiMetadata.description
+              const iconKey = manifest.uiMetadata.iconKey ?? integrationId
+              const scopesLabel = formatScopesLabel(manifest)
+              const canPersonal = supportsPersonal(manifest)
+              const canWorkspace = supportsWorkspace(manifest)
+              const workspaceFirst = isWorkspaceFirst(manifest)
+              const personalAuthStatus = resolvePersonalAuthStatus(
+                integrationId,
+                workspaceFirst
               )
-              // Slack personal authorizations are surfaced via the Slack
-              // auth state instead of listing personal tokens here.
-              if (provider.key === 'slack') {
+              const hasPersonalAuth = Boolean(
+                personalAuthStatus?.hasPersonalAuth
+              )
+              const personalAuthConnectedAt = formatPersonalAuthTimestamp(
+                personalAuthStatus?.personalAuthConnectedAt
+              )
+              const personalAuthLabels = {
+                authorize: `Authorize ${displayName} for yourself`,
+                reauthorize: `Reauthorize ${displayName}`,
+                authorized: `Personal ${displayName} authorized`,
+                authorizedHint: `${displayName} is authorized to post as you`,
+                authRequired: `Authorize ${displayName} for yourself to post as you.`
+              }
+
+              let personalConnections = canPersonal
+                ? (connections?.personal ?? []).filter(
+                    (entry) => entry.provider === integrationId
+                  )
+                : []
+              if (workspaceFirst) {
                 personalConnections = []
               }
-              const workspaceConnections = (
-                connections?.workspace ?? []
-              ).filter((entry) => entry.provider === provider.key)
+              const workspaceConnections = canWorkspace
+                ? (connections?.workspace ?? []).filter(
+                    (entry) => entry.provider === integrationId
+                  )
+                : []
               const connected = personalConnections.some(
                 (entry) => entry.connected && resolveConnectionKey(entry)
               )
@@ -648,23 +929,23 @@ export default function IntegrationsTab({
               const workspaceRequiresReconnect = workspaceConnections.some(
                 (entry) => entry.requiresReconnect
               )
-              const connecting = connectingProvider === provider.key
-              const busy = busyProvider === provider.key
-              const promoting = promoteBusyProvider === provider.key
-              const isExpanded = expandedProviders[provider.key] ?? true
-              const slackWorkspaceInstalled =
-                provider.key === 'slack' && workspaceConnections.length > 0
-              const showSlackPersonalStatus =
-                slackWorkspaceInstalled && hasSlackPersonalAuth
-              const slackMenuDisabled = isSoloPlan || isViewer || connecting
-              const connectLabel =
-                provider.key === 'slack'
-                  ? slackWorkspaceInstalled
-                    ? SLACK_PERSONAL_AUTHORIZE_LABEL
-                    : 'Install Slack to workspace'
-                  : personalConnections.length > 0
-                    ? 'Add connection'
-                    : 'Connect'
+              const connecting = connectingProvider === integrationId
+              const busy = busyProvider === integrationId
+              const promoting = promoteBusyProvider === integrationId
+              const isExpanded = expandedProviders[integrationId] ?? true
+              const workspaceFirstInstalled =
+                workspaceFirst && workspaceConnections.length > 0
+              const showPersonalAuthStatus =
+                workspaceFirstInstalled && hasPersonalAuth
+              const personalAuthMenuDisabled =
+                isSoloPlan || isViewer || connecting
+              const connectLabel = workspaceFirst
+                ? workspaceFirstInstalled
+                  ? personalAuthLabels.authorize
+                  : `Install ${displayName} to workspace`
+                : personalConnections.length > 0
+                  ? 'Add connection'
+                  : 'Connect'
               const personalCount = personalConnections.length
               const workspaceCount = workspaceConnections.length
               const personalSorted = [...personalConnections].sort((a, b) => {
@@ -694,21 +975,21 @@ export default function IntegrationsTab({
 
               return (
                 <section
-                  data-provider={provider.key}
-                  data-testid={`provider-${provider.key}`}
-                  key={provider.key}
+                  data-provider={integrationId}
+                  data-testid={`provider-${integrationId}`}
+                  key={integrationId}
                   className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900"
                 >
                   <button
                     type="button"
-                    onClick={() => toggleProvider(provider.key)}
+                    onClick={() => toggleProvider(integrationId)}
                     aria-expanded={isExpanded}
                     className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition hover:bg-zinc-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:hover:bg-zinc-800/50"
                   >
                     <div className="flex items-center gap-3">
                       <div className="flex h-10 w-10 items-center justify-center rounded-md border border-dashed border-zinc-300 bg-zinc-50 text-xs font-semibold uppercase text-zinc-400 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-500">
                         {(() => {
-                          const Logo = PROVIDER_ICONS[provider.key]
+                          const Logo = ICON_BY_KEY[iconKey]
                           if (Logo) {
                             return (
                               <Logo
@@ -720,17 +1001,17 @@ export default function IntegrationsTab({
                           }
                           return (
                             <span aria-hidden="true">
-                              {provider.name.slice(0, 1)}
+                              {displayName.slice(0, 1)}
                             </span>
                           )
                         })()}
                       </div>
                       <div className="flex flex-col">
                         <span className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
-                          {provider.name}
+                          {displayName}
                         </span>
                         <span className="text-xs text-zinc-500 dark:text-zinc-400">
-                          {personalCount} personal · {workspaceCount} workspace
+                          {personalCount} personal / {workspaceCount} workspace
                         </span>
                       </div>
                     </div>
@@ -753,28 +1034,28 @@ export default function IntegrationsTab({
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
-                          {provider.name}
+                          {displayName}
                         </h3>
                         <p className="mt-1 max-w-2xl text-sm text-zinc-600 dark:text-zinc-400">
-                          {provider.description}
+                          {description}
                         </p>
                       </div>
-                      {showSlackPersonalStatus ? (
+                      {showPersonalAuthStatus ? (
                         <div className="flex items-start gap-2">
                           <div className="flex flex-col items-end text-right">
                             <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-300">
-                              {SLACK_PERSONAL_AUTHORIZED_LABEL}
+                              {personalAuthLabels.authorized}
                             </span>
-                            {slackPersonalConnectedAt ? (
+                            {personalAuthConnectedAt ? (
                               <span className="text-[11px] text-zinc-400 dark:text-zinc-500">
-                                Authorized {slackPersonalConnectedAt}
+                                Authorized {personalAuthConnectedAt}
                               </span>
                             ) : null}
                           </div>
                           <details className="relative">
                             <summary
-                              aria-label="Slack personal authorization actions"
-                              className={`list-none flex h-8 w-8 items-center justify-center rounded-md border border-zinc-300 text-zinc-600 transition hover:bg-zinc-100 ${slackMenuDisabled ? 'pointer-events-none opacity-50' : ''} dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800`}
+                              aria-label={`${displayName} personal authorization actions`}
+                              className={`list-none flex h-8 w-8 items-center justify-center rounded-md border border-zinc-300 text-zinc-600 transition hover:bg-zinc-100 ${personalAuthMenuDisabled ? 'pointer-events-none opacity-50' : ''} dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800`}
                             >
                               <MoreVertical className="h-4 w-4" />
                             </summary>
@@ -788,12 +1069,15 @@ export default function IntegrationsTab({
                                   if (details) {
                                     details.removeAttribute('open')
                                   }
-                                  handleSlackAuthorizeSelf()
+                                  handleWorkspaceFirstPersonalAuth(
+                                    manifest,
+                                    workspaceConnections
+                                  )
                                 }}
-                                disabled={slackMenuDisabled}
+                                disabled={personalAuthMenuDisabled}
                                 className="w-full rounded px-2 py-1 text-left hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-zinc-800"
                               >
-                                {SLACK_PERSONAL_REAUTHORIZE_LABEL}
+                                {personalAuthLabels.reauthorize}
                               </button>
                             </div>
                           </details>
@@ -801,14 +1085,19 @@ export default function IntegrationsTab({
                       ) : (
                         <button
                           aria-label={
-                            provider.key === 'slack' && slackWorkspaceInstalled
-                              ? SLACK_PERSONAL_AUTHORIZE_LABEL
-                              : `Connect ${provider.name}`
+                            workspaceFirstInstalled
+                              ? personalAuthLabels.authorize
+                              : `Connect ${displayName}`
                           }
                           onClick={() =>
-                            provider.key === 'slack' && slackWorkspaceInstalled
-                              ? handleSlackAuthorizeSelf()
-                              : handleConnect(provider.key)
+                            workspaceFirstInstalled
+                              ? handleWorkspaceFirstPersonalAuth(
+                                  manifest,
+                                  workspaceConnections
+                                )
+                              : startIntegrationConnect(integrationId, {
+                                  workspaceId
+                                })
                           }
                           disabled={isSoloPlan || isViewer || connecting}
                           className="rounded-md bg-blue-600 px-3 py-1 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
@@ -848,7 +1137,7 @@ export default function IntegrationsTab({
                           Scopes:
                         </dt>
                         <dd className="text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-                          {provider.scopes}
+                          {scopesLabel}
                         </dd>
                       </div>
                     </dl>
@@ -864,14 +1153,18 @@ export default function IntegrationsTab({
                         <div className="font-semibold text-zinc-700 dark:text-zinc-200">
                           Your connections
                         </div>
-                        {provider.key !== 'slack' ? (
+                        {canPersonal && !workspaceFirst ? (
                           <button
-                            aria-label={`Add ${provider.name} connection`}
-                            onClick={() => handleConnect(provider.key)}
+                            aria-label={`Add ${displayName} connection`}
+                            onClick={() =>
+                              startIntegrationConnect(integrationId, {
+                                workspaceId
+                              })
+                            }
                             disabled={
                               isSoloPlan ||
                               isViewer ||
-                              connectingProvider === provider.key
+                              connectingProvider === integrationId
                             }
                             className="rounded-md border border-zinc-300 px-3 py-1 text-xs font-semibold text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
                           >
@@ -880,12 +1173,12 @@ export default function IntegrationsTab({
                         ) : null}
                       </div>
                       {personalSorted.length === 0 ? (
-                        provider.key === 'slack' && slackWorkspaceInstalled ? (
+                        workspaceFirst && workspaceFirstInstalled ? (
                           <div className="space-y-1">
                             <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                              {showSlackPersonalStatus
-                                ? SLACK_PERSONAL_AUTHORIZED_HINT
-                                : SLACK_PERSONAL_AUTH_REQUIRED}
+                              {showPersonalAuthStatus
+                                ? personalAuthLabels.authorizedHint
+                                : personalAuthLabels.authRequired}
                             </p>
                           </div>
                         ) : (
@@ -913,7 +1206,8 @@ export default function IntegrationsTab({
                               !hasValidId
                             const requiresReconnect = entry.requiresReconnect
                             const canShowPromote =
-                              provider.key !== 'slack' &&
+                              canWorkspace &&
+                              !workspaceFirst &&
                               canPromote &&
                               !isShared &&
                               hasValidConnectionId
@@ -922,7 +1216,7 @@ export default function IntegrationsTab({
                                 key={
                                   entryKey ??
                                   entry.id ??
-                                  `${provider.key}-personal-${index}`
+                                  `${integrationId}-personal-${index}`
                                 }
                                 className={`rounded border px-3 py-2 text-xs ${
                                   requiresReconnect
@@ -954,7 +1248,7 @@ export default function IntegrationsTab({
                                   <div className="flex flex-wrap items-center gap-2">
                                     <button
                                       onClick={() =>
-                                        handleRefresh(provider.key, entry)
+                                        handleRefresh(integrationId, entry)
                                       }
                                       disabled={actionDisabled}
                                       className="rounded-md border border-zinc-300 px-2 py-1 text-[11px] font-semibold text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
@@ -987,7 +1281,9 @@ export default function IntegrationsTab({
                                         </button>
                                       </>
                                     ) : null}
-                                    {canPromote &&
+                                    {canWorkspace &&
+                                    !workspaceFirst &&
+                                    canPromote &&
                                     !isShared &&
                                     !hasValidConnectionId ? (
                                       <div className="text-[11px] text-amber-600 dark:text-amber-400 mt-1">
@@ -1026,11 +1322,10 @@ export default function IntegrationsTab({
                       )}
                     </div>
 
-                    {provider.key === 'slack' &&
-                    workspaceConnections.length > 0 ? (
+                    {workspaceFirstInstalled ? (
                       <div className="mt-3 rounded-md border border-dashed border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
                         <div className="font-semibold text-zinc-800 dark:text-zinc-100">
-                          Slack connected to workspace
+                          {displayName} connected to workspace
                         </div>
                         <div className="mt-0.5">
                           Posting method:{' '}
@@ -1069,7 +1364,7 @@ export default function IntegrationsTab({
                                 key={
                                   workspaceKey ??
                                   entryKey ??
-                                  `${provider.key}-workspace-${index}`
+                                  `${integrationId}-workspace-${index}`
                                 }
                                 className={`rounded border px-3 py-2 text-xs ${
                                   entry.requiresReconnect
@@ -1083,7 +1378,7 @@ export default function IntegrationsTab({
                                       {entry.workspaceName}
                                     </div>
                                     <div className="text-zinc-600 dark:text-zinc-300">
-                                      {provider.key === 'slack' ? (
+                                      {workspaceFirst ? (
                                         <span>
                                           <span className="font-semibold">
                                             Workspace bot:
@@ -1286,7 +1581,9 @@ export default function IntegrationsTab({
                 workspace: nextWorkspaceWithPromotion,
                 slackPersonalAuth: cloneSlackPersonalAuth(
                   prev?.slackPersonalAuth
-                )
+                ),
+                personalAuth: clonePersonalAuth(prev?.personalAuth),
+                manifests: cloneManifests(prev?.manifests)
               }
               setCachedConnections(next, { workspaceId })
               return next
@@ -1302,7 +1599,9 @@ export default function IntegrationsTab({
                 workspace: data.workspace.map((w) => ({ ...w })),
                 slackPersonalAuth: cloneSlackPersonalAuth(
                   data.slackPersonalAuth
-                )
+                ),
+                personalAuth: clonePersonalAuth(data.personalAuth),
+                manifests: cloneManifests(data.manifests)
               })
             } catch {
               // ignore refresh failures
@@ -1327,9 +1626,7 @@ export default function IntegrationsTab({
           if (!removeDialog) {
             return 'Stop sharing this connection with the workspace?'
           }
-          const providerName =
-            PROVIDERS.find((p) => p.key === removeDialog.provider)?.name ??
-            'Integration'
+          const providerName = resolveIntegrationName(removeDialog.provider)
           const workspaceName = removeDialog.workspaceName?.trim().length
             ? removeDialog.workspaceName
             : 'this workspace'
@@ -1394,7 +1691,9 @@ export default function IntegrationsTab({
                 workspace: nextWorkspace,
                 slackPersonalAuth: cloneSlackPersonalAuth(
                   prev?.slackPersonalAuth
-                )
+                ),
+                personalAuth: clonePersonalAuth(prev?.personalAuth),
+                manifests: cloneManifests(prev?.manifests)
               }
               setCachedConnections(next, { workspaceId })
               return next
@@ -1419,10 +1718,9 @@ export default function IntegrationsTab({
           if (!disconnectDialog) {
             return 'Disconnect this OAuth credential?'
           }
-          const providerName =
-            PROVIDERS.find(
-              (p) => p.key === disconnectDialog.connection.provider
-            )?.name ?? 'this provider'
+          const providerName = resolveIntegrationName(
+            disconnectDialog.connection.provider
+          )
           const connectionId =
             resolveConnectionKey(disconnectDialog.connection) ?? 'unknown id'
           const workspaces = disconnectDialog.sharedConnections

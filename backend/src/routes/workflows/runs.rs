@@ -256,7 +256,7 @@ pub async fn start_workflow_run(
                     if !allowed_ids.contains(&wf.id) {
                         let violation = PlanViolation {
                             code: "workflow-limit",
-                            message: "This workflow is locked on the solo plan. Upgrade in Settings → Plan to run it.".to_string(),
+                            message: "This workflow is locked on the solo plan. Upgrade in Settings -> Plan to run it.".to_string(),
                             node_label: None,
                         };
                         return plan_violation_response(vec![violation]);
@@ -288,7 +288,7 @@ pub async fn start_workflow_run(
             Ok(count) if count >= SOLO_MONTHLY_RUN_LIMIT => {
                 let violation = PlanViolation {
                     code: "run-limit",
-                    message: "Solo plan usage includes 250 runs per month. You've reached the limit—upgrade in Settings → Plan to keep running workflows.".to_string(),
+                    message: "Solo plan usage includes 250 runs per month. You've reached the limit - upgrade in Settings -> Plan to keep running workflows.".to_string(),
                     node_label: None,
                 };
                 return plan_violation_response(vec![violation]);
@@ -1081,6 +1081,7 @@ mod tests {
             ),
             workspace_oauth: WorkspaceOAuthService::test_stub(),
             stripe: Arc::new(crate::services::stripe::MockStripeService::new()),
+            integration_registry: crate::state::test_integration_registry(),
             http_client: Arc::new(Client::new()),
             config: test_config(),
             worker_id: Arc::new("worker-1".into()),

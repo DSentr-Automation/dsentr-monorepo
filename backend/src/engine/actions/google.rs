@@ -269,7 +269,7 @@ pub(crate) async fn execute_sheets(
 
                     (
                         account_email.clone(),
-                        "Google revoked the connected account. Reconnect it from Settings → Integrations.".to_string(),
+                        "Google revoked the connected account. Reconnect it from Settings -> Integrations.".to_string(),
                     )
                 }
                 ConnectionContext::Workspace {
@@ -305,7 +305,7 @@ pub(crate) async fn execute_sheets(
 
                     (
                         account_email.clone(),
-                        "Google revoked the shared workspace connection. Ask the owner to reconnect it from Settings → Integrations.".to_string(),
+                        "Google revoked the shared workspace connection. Ask the owner to reconnect it from Settings -> Integrations.".to_string(),
                     )
                 }
             };
@@ -465,11 +465,11 @@ fn extract_required_str<'a>(params: &'a Value, key: &str, field: &str) -> Result
 fn map_oauth_error(err: OAuthAccountError) -> String {
     match err {
         OAuthAccountError::NotFound => {
-            "No connected Google account found. Connect one from Settings → Integrations."
+            "No connected Google account found. Connect one from Settings -> Integrations."
                 .to_string()
         }
         OAuthAccountError::TokenRevoked { .. } => {
-            "The connected Google account was revoked. Reconnect it from Settings → Integrations."
+            "The connected Google account was revoked. Reconnect it from Settings -> Integrations."
                 .to_string()
         }
         other => format!("Failed to obtain Google access token: {other}"),
@@ -1004,6 +1004,7 @@ mod tests {
             oauth_accounts,
             workspace_oauth: WorkspaceOAuthService::test_stub(),
             stripe: Arc::new(crate::services::stripe::MockStripeService::new()),
+            integration_registry: crate::state::test_integration_registry(),
             http_client,
             config: test_config(),
             worker_id: Arc::new("worker".to_string()),

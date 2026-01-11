@@ -742,6 +742,7 @@ mod tests {
             oauth_accounts,
             workspace_oauth: WorkspaceOAuthService::test_stub(),
             stripe: Arc::new(crate::services::stripe::MockStripeService::new()),
+            integration_registry: crate::state::test_integration_registry(),
             http_client,
             config: test_config(),
             worker_id: Arc::new("worker".to_string()),

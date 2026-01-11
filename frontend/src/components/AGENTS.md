@@ -70,6 +70,7 @@
 - Slack action channel refresh now runs only when the workspace connection changes so personal connection updates do not trigger redundant fetches.
 - Slack action now defaults to the workspace bot identity, clears incompatible connection selections when switching identity, and gates personal Slack selection on having a workspace connection.
 - Settings > Integrations: Slack now displays personal authorization status (with optional timestamp) and moves reauthorization behind a secondary menu so users can see post-as-you availability without triggering repeated OAuth flows.
+- Settings > Integrations: provider cards now consume integration manifest metadata for labels/scopes/constraints so workspace-first warnings and personal-auth prompts are manifest-driven without provider-specific branching.
 - Slack action identity selection now honors the Slack personal authorization state from the connections snapshot, disabling "Post as you" until personal authorization is present.
 - Asana action flyout: dropdowns (operation/workspace/project/task/assignee/section/tag/comment) are searchable when large, project/task/tag/assignee/comment now include manual options with GID inputs that sync selection states, due date/time fields mirror ISO text inputs, and the add-task-to-project flow uses task GID + project selection only (no section picker).
 - Asana action build hygiene: removed unused fetch import, simplified required-field ordering for add-task-to-project, and tightened API normalization to keep TS builds passing alongside the templated GID inputs.
@@ -95,6 +96,5 @@ Styles live in `src/css/globals.css` under `.themed-scroll` and were previously 
 - Added a Formatter logic node UI with grouped dropdown selection, validation, and palette/flyout wiring so users can transform data without new components or custom styling.
 - Workflow nodes: dashed summary areas now show an explicit click affordance (hover overlay + pointer cursor) and open the flyout on mouseup without interfering with node dragging, fixing missed flyout openings when using the on-card hint zone.
 - Delay and Formatter nodes now use the same dashed hint surface to open their flyouts, matching the rest of the node cards.
-
 
 

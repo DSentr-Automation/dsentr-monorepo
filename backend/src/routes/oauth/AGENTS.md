@@ -6,7 +6,7 @@
 
 ## Key Modules
 - `prelude.rs`: Common `use` imports (Axum extractors, AppState, ConnectedOAuthProvider, etc.) re-exported for sibling modules.
-- `helpers.rs`: Shared constants and utilities—state cookie helpers, provider parsing, redirect builders, and error mapping.
+- `helpers.rs`: Shared constants and utilities-state cookie helpers, manifest lookup, OAuth provider mapping, redirect builders, and error mapping.
 - `connect.rs`: `/oauth/{provider}/connect` start + callback endpoints. Exchanges authorization codes and persists tokens via `OAuthAccountService`.
 - `accounts.rs`: Authenticated APIs to list, refresh, and disconnect stored connections.
 - `tests.rs`: End-to-end tests that validate the helper utilities and account flows.
@@ -14,8 +14,8 @@
 
 ## Usage Tips
 - Always validate the returned `state` parameter before exchanging codes; reuse `build_state_cookie`/`clear_state_cookie`.
-- When adding new providers, extend `ConnectedOAuthProvider`, update `parse_provider`/`provider_to_key`, and build new connect handlers following the existing pattern.
-- Redirects back to the frontend include query flags—coordinate expected parameters with the UI before changing them.
+- When adding new providers, extend `ConnectedOAuthProvider`, add a manifest entry, update the OAuth mapping helper, and build new connect handlers following the existing pattern.
+- Redirects back to the frontend include query flags-coordinate expected parameters with the UI before changing them.
 
 ## Change Reasons
 - Accounts: Listing connections now requires an explicit `workspace` query parameter and verifies membership via `workspace_repo.list_memberships_for_user` before proceeding. This prevents cross-workspace leakage and aligns with workspace context routing elsewhere.
@@ -50,3 +50,6 @@
 - OAuth route test workspace connection stubs now return a synthetic audit event so workspace promotion flows don't fail on audit logging during tests.
 - OAuth route test configs now include the webhook ingress dedupe mode field to keep Config initialization consistent.
 - OAuth route test configs no longer require `WEBHOOK_SECRET` after removing workflow-scoped webhook settings.
+- OAuth route test fixtures now include the integration registry in AppState to stay aligned with shared state wiring.
+- OAuth routes now resolve integrations by ID, map OAuth providers in a routing-local helper, return flat connection arrays, and include manifest metadata plus a generic personal-auth map for workspace-first integrations.
+- OAuth routes now share a single integration-resolution helper, use integration-id constants in connect handlers, and align path errors on "integration" terminology.

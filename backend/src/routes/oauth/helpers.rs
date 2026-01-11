@@ -1,4 +1,10 @@
+use std::collections::{BTreeMap, HashSet};
+
 use super::prelude::*;
+use crate::integrations::manifest::{
+    IntegrationAuthType, IntegrationManifest, OwnershipModel, TokenScope,
+};
+use crate::integrations::registry::IntegrationRegistry;
 pub(crate) const GOOGLE_AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 pub(crate) const MICROSOFT_AUTH_URL: &str =
     "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
@@ -72,54 +78,63 @@ pub(crate) struct WorkspaceConnectionPayload {
     pub(crate) owner: ConnectionOwnerPayload,
 }
 
-#[derive(Serialize)]
-pub(crate) struct ProviderGroupedConnections<T> {
-    pub(crate) google: Vec<T>,
-    pub(crate) microsoft: Vec<T>,
-    pub(crate) slack: Vec<T>,
-    pub(crate) asana: Vec<T>,
-    pub(crate) notion: Vec<T>,
-}
-
-impl<T> Default for ProviderGroupedConnections<T> {
-    fn default() -> Self {
-        Self {
-            google: Vec::new(),
-            microsoft: Vec::new(),
-            slack: Vec::new(),
-            asana: Vec::new(),
-            notion: Vec::new(),
-        }
-    }
-}
-
-impl<T> ProviderGroupedConnections<T> {
-    pub(crate) fn push(&mut self, provider: ConnectedOAuthProvider, payload: T) {
-        match provider {
-            ConnectedOAuthProvider::Google => self.google.push(payload),
-            ConnectedOAuthProvider::Microsoft => self.microsoft.push(payload),
-            ConnectedOAuthProvider::Slack => self.slack.push(payload),
-            ConnectedOAuthProvider::Asana => self.asana.push(payload),
-            ConnectedOAuthProvider::Notion => self.notion.push(payload),
-        }
-    }
-}
-
-#[derive(Serialize, Default)]
+#[derive(Serialize, Default, Clone)]
 #[serde(rename_all = "snake_case")]
-pub(crate) struct SlackPersonalAuthStatus {
+pub(crate) struct PersonalAuthStatus {
     pub(crate) has_personal_auth: bool,
     #[serde(with = "time::serde::rfc3339::option")]
     pub(crate) personal_auth_connected_at: Option<OffsetDateTime>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct IntegrationManifestPayload {
+    pub(crate) integration_id: String,
+    pub(crate) auth_type: String,
+    pub(crate) token_scope: String,
+    pub(crate) ownership_model: String,
+    pub(crate) provider_constraints: ProviderConstraintsPayload,
+    pub(crate) ui_metadata: UiMetadataPayload,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) oauth_metadata: Option<OAuthMetadataPayload>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProviderConstraintsPayload {
+    pub(crate) workspace_first: bool,
+    pub(crate) single_install_per_workspace: bool,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UiMetadataPayload {
+    pub(crate) display_name: String,
+    pub(crate) description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) icon_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) docs_url: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OAuthMetadataPayload {
+    pub(crate) scopes: Vec<String>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ConnectionsResponse {
     pub(crate) success: bool,
-    pub(crate) personal: ProviderGroupedConnections<PersonalConnectionPayload>,
-    pub(crate) workspace: ProviderGroupedConnections<WorkspaceConnectionPayload>,
-    pub(crate) slack: SlackPersonalAuthStatus,
+    pub(crate) personal: Vec<PersonalConnectionPayload>,
+    pub(crate) workspace: Vec<WorkspaceConnectionPayload>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) personal_auth: BTreeMap<String, PersonalAuthStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) slack: Option<PersonalAuthStatus>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) manifests: Vec<IntegrationManifestPayload>,
 }
 
 #[derive(Serialize)]
@@ -144,36 +159,37 @@ pub(crate) async fn handle_callback(
     jar: CookieJar,
     query: CallbackQuery,
     provider: ConnectedOAuthProvider,
+    integration_id: &str,
     cookie_name: &str,
 ) -> Response {
     if let Some(error) = query.error.or(query.error_description) {
-        return redirect_with_error(&state.config, provider, &error);
+        return redirect_with_error(&state.config, integration_id, &error);
     }
 
     let code = match query.code {
         Some(code) => code,
-        None => return redirect_with_error(&state.config, provider, "Missing code"),
+        None => return redirect_with_error(&state.config, integration_id, "Missing code"),
     };
 
     let expected_state = match jar.get(cookie_name) {
         Some(cookie) => cookie.value().to_string(),
-        None => return redirect_with_error(&state.config, provider, "Missing state"),
+        None => return redirect_with_error(&state.config, integration_id, "Missing state"),
     };
 
     let provided_state = match query.state {
         Some(state) => state,
-        None => return redirect_with_error(&state.config, provider, "Missing state"),
+        None => return redirect_with_error(&state.config, integration_id, "Missing state"),
     };
 
     if provided_state != expected_state {
-        return redirect_with_error(&state.config, provider, "Invalid state");
+        return redirect_with_error(&state.config, integration_id, "Invalid state");
     }
 
     let jar = clear_state_cookie(jar, cookie_name);
 
     let user_id = match Uuid::parse_str(&claims.id) {
         Ok(id) => id,
-        Err(_) => return redirect_with_error(&state.config, provider, "Invalid user"),
+        Err(_) => return redirect_with_error(&state.config, integration_id, "Invalid user"),
     };
 
     let tokens = match state
@@ -184,8 +200,11 @@ pub(crate) async fn handle_callback(
         Ok(tokens) => tokens,
         Err(err) => {
             error!("OAuth authorization exchange failed: {err}");
-            let response =
-                redirect_with_error(&state.config, provider, &error_message_for_redirect(&err));
+            let response = redirect_with_error(
+                &state.config,
+                integration_id,
+                &error_message_for_redirect(&err),
+            );
             return (jar, response).into_response();
         }
     };
@@ -196,12 +215,15 @@ pub(crate) async fn handle_callback(
         .await
     {
         error!("Saving OAuth authorization failed: {err}");
-        let response =
-            redirect_with_error(&state.config, provider, &error_message_for_redirect(&err));
+        let response = redirect_with_error(
+            &state.config,
+            integration_id,
+            &error_message_for_redirect(&err),
+        );
         return (jar, response).into_response();
     }
 
-    (jar, redirect_success(&state.config, provider)).into_response()
+    (jar, redirect_success(&state.config, integration_id)).into_response()
 }
 
 pub(crate) fn build_slack_state(workspace_id: Uuid) -> String {
@@ -242,93 +264,70 @@ pub(crate) fn clear_state_cookie(jar: CookieJar, name: &str) -> CookieJar {
     jar.add(cookie)
 }
 
-pub(crate) fn parse_provider(raw: &str) -> Option<ConnectedOAuthProvider> {
-    match raw.to_ascii_lowercase().as_str() {
-        "google" => Some(ConnectedOAuthProvider::Google),
-        "microsoft" => Some(ConnectedOAuthProvider::Microsoft),
-        "slack" => Some(ConnectedOAuthProvider::Slack),
-        "asana" => Some(ConnectedOAuthProvider::Asana),
-        "notion" => Some(ConnectedOAuthProvider::Notion),
-        _ => None,
-    }
-}
-
-pub(crate) fn provider_to_key(provider: ConnectedOAuthProvider) -> &'static str {
-    match provider {
-        ConnectedOAuthProvider::Google => "google",
-        ConnectedOAuthProvider::Microsoft => "microsoft",
-        ConnectedOAuthProvider::Slack => "slack",
-        ConnectedOAuthProvider::Asana => "asana",
-        ConnectedOAuthProvider::Notion => "notion",
-    }
-}
-
-fn redirect_success(config: &Config, provider: ConnectedOAuthProvider) -> Redirect {
-    redirect_success_with_workspace_optional(config, provider, None)
+fn redirect_success(config: &Config, integration_id: &str) -> Redirect {
+    redirect_success_with_workspace_optional(config, integration_id, None)
 }
 
 pub(crate) fn redirect_with_error(
     config: &Config,
-    provider: ConnectedOAuthProvider,
+    integration_id: &str,
     message: &str,
 ) -> Response {
-    redirect_with_error_optional(config, provider, message, None)
+    redirect_with_error_optional(config, integration_id, message, None)
 }
 
 pub(crate) fn redirect_success_with_workspace(
     config: &Config,
-    provider: ConnectedOAuthProvider,
+    integration_id: &str,
     workspace_id: Uuid,
 ) -> Redirect {
-    redirect_success_with_workspace_optional(config, provider, Some(workspace_id))
+    redirect_success_with_workspace_optional(config, integration_id, Some(workspace_id))
 }
 
 pub(crate) fn redirect_with_error_with_workspace(
     config: &Config,
-    provider: ConnectedOAuthProvider,
+    integration_id: &str,
     message: &str,
     workspace_id: Option<Uuid>,
 ) -> Response {
-    redirect_with_error_optional(config, provider, message, workspace_id)
+    redirect_with_error_optional(config, integration_id, message, workspace_id)
 }
 
-pub(crate) fn redirect_with_error_for_provider(
+pub(crate) fn redirect_with_error_for_manifest(
     config: &Config,
-    provider: ConnectedOAuthProvider,
+    manifest: &IntegrationManifest,
     message: &str,
     workspace_id: Option<Uuid>,
 ) -> Response {
-    match provider {
-        ConnectedOAuthProvider::Slack => {
-            redirect_with_error_optional(config, provider, message, workspace_id)
-        }
-        _ => redirect_with_error(config, provider, message),
+    if manifest.provider_constraints.workspace_first {
+        redirect_with_error_optional(config, &manifest.integration_id, message, workspace_id)
+    } else {
+        redirect_with_error(config, &manifest.integration_id, message)
     }
 }
 
 fn redirect_success_with_workspace_optional(
     config: &Config,
-    provider: ConnectedOAuthProvider,
+    integration_id: &str,
     workspace_id: Option<Uuid>,
 ) -> Redirect {
     let url = format!(
         "{}/dashboard?connected=true&provider={}",
-        config.frontend_origin,
-        provider_to_key(provider)
+        config.frontend_origin, integration_id
     );
     Redirect::to(&append_workspace_param(url, workspace_id))
 }
 
 fn redirect_with_error_optional(
     config: &Config,
-    provider: ConnectedOAuthProvider,
+    integration_id: &str,
     message: &str,
     workspace_id: Option<Uuid>,
 ) -> Response {
     let url = format!(
         "{}/dashboard?connected=false&provider={}&error={}",
         config.frontend_origin,
-        provider_to_key(provider),
+        integration_id,
         encode(message)
     );
     Redirect::to(&append_workspace_param(url, workspace_id)).into_response()
@@ -403,4 +402,191 @@ pub(crate) fn error_message_for_redirect(err: &OAuthAccountError) -> String {
             "The OAuth provider did not return a refresh token.".to_string()
         }
     }
+}
+
+pub(crate) fn manifest_payloads(registry: &IntegrationRegistry) -> Vec<IntegrationManifestPayload> {
+    let mut payloads = registry
+        .iter()
+        .map(|manifest| IntegrationManifestPayload {
+            integration_id: manifest.integration_id.clone(),
+            auth_type: auth_type_label(manifest.auth_type),
+            token_scope: token_scope_label(manifest.token_scope),
+            ownership_model: ownership_model_label(manifest.ownership_model),
+            provider_constraints: ProviderConstraintsPayload {
+                workspace_first: manifest.provider_constraints.workspace_first,
+                single_install_per_workspace: manifest
+                    .provider_constraints
+                    .single_install_per_workspace,
+            },
+            ui_metadata: UiMetadataPayload {
+                display_name: manifest.ui_metadata.display_name.clone(),
+                description: manifest.ui_metadata.description.clone(),
+                icon_key: manifest.ui_metadata.icon_key.clone(),
+                docs_url: manifest.ui_metadata.docs_url.clone(),
+            },
+            oauth_metadata: manifest
+                .oauth_metadata
+                .as_ref()
+                .map(|oauth| OAuthMetadataPayload {
+                    scopes: oauth.scopes.clone(),
+                }),
+        })
+        .collect::<Vec<_>>();
+    payloads.sort_by(|a, b| a.integration_id.cmp(&b.integration_id));
+    payloads
+}
+
+pub(crate) fn is_workspace_first(manifest: &IntegrationManifest) -> bool {
+    manifest.provider_constraints.workspace_first
+        && supports_personal(manifest)
+        && supports_workspace(manifest)
+}
+
+pub(crate) fn supports_personal(manifest: &IntegrationManifest) -> bool {
+    manifest.token_scope.supports_personal() && manifest.ownership_model.supports_personal()
+}
+
+pub(crate) fn supports_workspace(manifest: &IntegrationManifest) -> bool {
+    manifest.token_scope.supports_workspace() && manifest.ownership_model.supports_workspace()
+}
+
+pub(crate) fn oauth_manifest_for_id<'a>(
+    registry: &'a IntegrationRegistry,
+    integration_id: &str,
+) -> Option<&'a IntegrationManifest> {
+    let manifest = registry.get(integration_id)?;
+    if manifest.auth_type != IntegrationAuthType::OAuth2 {
+        return None;
+    }
+    Some(manifest)
+}
+
+#[allow(clippy::result_large_err)]
+pub(crate) fn resolve_oauth_integration<'a>(
+    registry: &'a IntegrationRegistry,
+    integration_id: &str,
+) -> Result<(&'a IntegrationManifest, ConnectedOAuthProvider), Response> {
+    let manifest = match oauth_manifest_for_id(registry, integration_id) {
+        Some(manifest) => manifest,
+        None => return Err(JsonResponse::bad_request("Unknown integration").into_response()),
+    };
+    let provider = match oauth_provider_for_integration_id(&manifest.integration_id) {
+        Some(provider) => provider,
+        None => {
+            error!(
+                integration_id = %manifest.integration_id,
+                "OAuth provider missing from mapping table"
+            );
+            return Err(
+                JsonResponse::server_error("OAuth provider configuration is missing")
+                    .into_response(),
+            );
+        }
+    };
+    Ok((manifest, provider))
+}
+
+// Legacy mapping: OAuth provider enums are still required by OAuth services, but integrations
+// stay integration_id-driven. This mapping is intentionally isolated to OAuth routes, and
+// manifests must not depend on provider enums going forward.
+pub(crate) const GOOGLE_INTEGRATION_ID: &str = "google";
+pub(crate) const MICROSOFT_INTEGRATION_ID: &str = "microsoft";
+pub(crate) const SLACK_INTEGRATION_ID: &str = "slack";
+pub(crate) const ASANA_INTEGRATION_ID: &str = "asana";
+pub(crate) const NOTION_INTEGRATION_ID: &str = "notion";
+const OAUTH_PROVIDER_MAP: &[(&str, ConnectedOAuthProvider)] = &[
+    (GOOGLE_INTEGRATION_ID, ConnectedOAuthProvider::Google),
+    (MICROSOFT_INTEGRATION_ID, ConnectedOAuthProvider::Microsoft),
+    (SLACK_INTEGRATION_ID, ConnectedOAuthProvider::Slack),
+    (ASANA_INTEGRATION_ID, ConnectedOAuthProvider::Asana),
+    (NOTION_INTEGRATION_ID, ConnectedOAuthProvider::Notion),
+];
+
+pub(crate) fn oauth_provider_for_integration_id(
+    integration_id: &str,
+) -> Option<ConnectedOAuthProvider> {
+    let normalized = integration_id.trim().to_ascii_lowercase();
+    OAUTH_PROVIDER_MAP
+        .iter()
+        .find(|(id, _)| *id == normalized)
+        .map(|(_, provider)| *provider)
+}
+
+pub(crate) fn integration_id_for_provider(
+    provider: ConnectedOAuthProvider,
+) -> Option<&'static str> {
+    OAUTH_PROVIDER_MAP
+        .iter()
+        .find(|(_, mapped)| *mapped == provider)
+        .map(|(id, _)| *id)
+}
+
+#[allow(dead_code)]
+pub(crate) fn assert_oauth_provider_mappings(registry: &IntegrationRegistry) -> Result<(), String> {
+    let mut seen_ids = HashSet::new();
+    let mut seen_providers = HashSet::new();
+    for (integration_id, provider) in OAUTH_PROVIDER_MAP.iter() {
+        if !seen_ids.insert(*integration_id) {
+            return Err(format!(
+                "OAuth mapping contains duplicate integration_id: {}",
+                integration_id
+            ));
+        }
+        if !seen_providers.insert(*provider) {
+            return Err(format!(
+                "OAuth mapping contains duplicate provider: {:?}",
+                provider
+            ));
+        }
+        let manifest = registry
+            .get(integration_id)
+            .ok_or_else(|| format!("OAuth mapping missing manifest: {}", integration_id))?;
+        if manifest.auth_type != IntegrationAuthType::OAuth2 {
+            return Err(format!(
+                "OAuth mapping references non-OAuth integration: {}",
+                integration_id
+            ));
+        }
+    }
+
+    for manifest in registry
+        .iter()
+        .filter(|manifest| manifest.auth_type == IntegrationAuthType::OAuth2)
+    {
+        if oauth_provider_for_integration_id(&manifest.integration_id).is_none() {
+            return Err(format!(
+                "OAuth integration missing provider mapping: {}",
+                manifest.integration_id
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn auth_type_label(value: IntegrationAuthType) -> String {
+    match value {
+        IntegrationAuthType::OAuth2 => "oauth2",
+        IntegrationAuthType::ApiKey => "api_key",
+        IntegrationAuthType::None => "none",
+    }
+    .to_string()
+}
+
+fn token_scope_label(value: TokenScope) -> String {
+    match value {
+        TokenScope::Personal => "personal",
+        TokenScope::Workspace => "workspace",
+        TokenScope::PersonalAndWorkspace => "personal_and_workspace",
+    }
+    .to_string()
+}
+
+fn ownership_model_label(value: OwnershipModel) -> String {
+    match value {
+        OwnershipModel::PersonalOnly => "personal_only",
+        OwnershipModel::WorkspaceOnly => "workspace_only",
+        OwnershipModel::Hybrid => "hybrid",
+    }
+    .to_string()
 }

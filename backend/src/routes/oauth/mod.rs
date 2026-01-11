@@ -15,4 +15,6 @@ pub use connect::{
     microsoft_connect_callback, microsoft_connect_start, notion_connect_callback,
     notion_connect_start, slack_connect_callback, slack_connect_start,
 };
+#[allow(unused_imports)]
+pub(crate) use helpers::assert_oauth_provider_mappings;
 pub use helpers::map_oauth_error;

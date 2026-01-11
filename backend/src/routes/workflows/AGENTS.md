@@ -37,3 +37,5 @@
 - Workflow route test configs now include webhook ingress dedupe mode to keep Config stubs aligned.
 - Removed workflow-scoped webhook endpoints and token helpers now that inbound webhook traffic is handled through source-based ingress.
 - Trigger start validation helpers now allow large Response errors to keep run request signatures stable without clippy noise.
+- Workflow run test AppState fixtures now include the integration registry to match the expanded shared state.
+- Workflow plan violation messages now use ASCII punctuation to fix encoding corruption.

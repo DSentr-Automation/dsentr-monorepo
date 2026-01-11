@@ -298,7 +298,7 @@ async fn send_slack(
     // (they may be duplicated by the sanitizer). Do not treat this as specifying two identities.
 
     // Resolve explicit connection usage. If none present, do NOT attempt any
-    // workspace-scoped inference — engine must require an explicit identity.
+    // workspace-scoped inference - engine must require an explicit identity.
     let connection_usage = match resolve_connection_usage(params) {
         Ok(u) => u,
         Err(_) => {
@@ -474,7 +474,7 @@ async fn send_slack(
                             "personal_user error: connect Slack integration before selecting an OAuth connection".to_string()
                         }
                         OAuthAccountError::TokenRevoked { .. } => {
-                            "personal_user error: the connected Slack account was revoked. Reconnect it from Settings → Integrations.".to_string()
+                            "personal_user error: the connected Slack account was revoked. Reconnect it from Settings -> Integrations.".to_string()
                         }
                         other => format!("personal_user error: failed to refresh Slack OAuth token: {other}"),
                     })?;
@@ -712,7 +712,7 @@ async fn send_slack(
                                 );
                             }
 
-                            return Err("personal_user error: Slack revoked the connected account. Reconnect it from Settings → Integrations.".to_string());
+                            return Err("personal_user error: Slack revoked the connected account. Reconnect it from Settings -> Integrations.".to_string());
                         }
                         SlackConnectionContext::Workspace {
                             workspace_id,
@@ -731,7 +731,7 @@ async fn send_slack(
                                 );
                             }
 
-                            return Err("workspace_bot error: Slack revoked the connected account. Reconnect it from Settings → Integrations.".to_string());
+                            return Err("workspace_bot error: Slack revoked the connected account. Reconnect it from Settings -> Integrations.".to_string());
                         }
                     }
                 }
@@ -1743,7 +1743,7 @@ async fn send_teams_delegated_oauth(
                             .to_string()
                     }
                     OAuthAccountError::TokenRevoked { .. } => {
-                        "The connected Microsoft account was revoked. Reconnect it from Settings → Integrations.".to_string()
+                        "The connected Microsoft account was revoked. Reconnect it from Settings -> Integrations.".to_string()
                     }
                     other => format!("Failed to refresh Microsoft OAuth token: {other}"),
                 })?;
@@ -1836,7 +1836,7 @@ async fn send_teams_delegated_oauth(
 
                     (
                         account_email.clone(),
-                        "Microsoft revoked the connected account. Reconnect it from Settings → Integrations.".to_string(),
+                        "Microsoft revoked the connected account. Reconnect it from Settings -> Integrations.".to_string(),
                     )
                 }
                 ConnectionContext::Workspace {
@@ -1872,7 +1872,7 @@ async fn send_teams_delegated_oauth(
 
                     (
                         account_email.clone(),
-                        "Microsoft revoked the shared workspace connection. Ask the owner to reconnect it from Settings → Integrations.".to_string(),
+                        "Microsoft revoked the shared workspace connection. Ask the owner to reconnect it from Settings -> Integrations.".to_string(),
                     )
                 }
             };
@@ -2587,6 +2587,7 @@ mod tests {
             oauth_accounts,
             workspace_oauth,
             stripe: Arc::new(crate::services::stripe::MockStripeService::new()),
+            integration_registry: crate::state::test_integration_registry(),
             http_client: Arc::new(Client::new()),
             config,
             worker_id: Arc::new("worker".to_string()),

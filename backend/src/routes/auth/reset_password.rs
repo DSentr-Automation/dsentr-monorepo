@@ -13,7 +13,7 @@ pub struct ResetPasswordRequest {
     password: String,
 }
 
-// 👇 Called on page load (GET request)
+// Called on page load (GET request)
 pub async fn handle_verify_token(
     State(state): State<AppState>,
     Path(token): Path<String>,
@@ -28,7 +28,7 @@ pub async fn handle_verify_token(
     }
 }
 
-// 👇 Called on form submission (POST request)
+// Called on form submission (POST request)
 pub async fn handle_reset_password(
     State(state): State<AppState>,
     Json(payload): Json<ResetPasswordRequest>,
@@ -427,6 +427,7 @@ mod tests {
             oauth_accounts: OAuthAccountService::test_stub(),
             workspace_oauth: WorkspaceOAuthService::test_stub(),
             stripe: Arc::new(crate::services::stripe::MockStripeService::new()),
+            integration_registry: crate::state::test_integration_registry(),
             http_client: Arc::new(Client::new()),
             config: test_config(),
             worker_id: Arc::new("test-worker".to_string()),

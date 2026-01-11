@@ -5,6 +5,7 @@ use crate::db::{
     workspace_connection_repository::WorkspaceConnectionRepository,
     workspace_repository::WorkspaceRepository,
 };
+use crate::integrations::registry::IntegrationRegistry;
 use crate::models::{plan::PlanTier, workspace::WorkspaceBillingCycle};
 use crate::services::oauth::{
     account_service::OAuthAccountService, github::service::GitHubOAuthService,
@@ -38,6 +39,7 @@ pub struct AppState {
     pub oauth_accounts: Arc<OAuthAccountService>,
     pub workspace_oauth: Arc<WorkspaceOAuthService>,
     pub stripe: Arc<dyn StripeService>,
+    pub integration_registry: Arc<IntegrationRegistry>,
     pub http_client: Arc<Client>,
     pub config: Arc<Config>,
     pub worker_id: Arc<String>,
@@ -132,11 +134,11 @@ impl AppState {
                             )
                             .await;
                         }
-                        // Active subscription present → keep workspace tier
+                        // Active subscription present -> keep workspace tier
                         return db_tier;
                     }
                     Ok(None) => {
-                        // No active subscription → revert personal + owned workspaces to solo
+                        // No active subscription -> revert personal + owned workspaces to solo
                         if let Err(err) = self.db.update_user_plan(user_id, "solo").await {
                             error!(%user_id, ?err, "failed to revert user plan to solo during tier resolution");
                         } else if let Ok(memberships) =
@@ -478,6 +480,14 @@ impl JwtKeyProvider for AppState {
 pub use crate::services::stripe::{MockStripeService, StripeService as StripeServiceTrait};
 
 #[cfg(test)]
+pub fn test_integration_registry() -> Arc<IntegrationRegistry> {
+    Arc::new(
+        crate::integrations::build_integration_registry()
+            .expect("test integration registry should build"),
+    )
+}
+
+#[cfg(test)]
 pub fn test_pg_pool() -> Arc<PgPool> {
     Arc::new(
         sqlx::postgres::PgPoolOptions::new()
@@ -632,6 +642,7 @@ mod tests {
             oauth_accounts: OAuthAccountService::test_stub(),
             workspace_oauth: WorkspaceOAuthService::test_stub(),
             stripe: Arc::new(crate::services::stripe::MockStripeService::new()),
+            integration_registry: test_integration_registry(),
             http_client: Arc::new(Client::new()),
             config,
             worker_id: Arc::new("test-worker".into()),

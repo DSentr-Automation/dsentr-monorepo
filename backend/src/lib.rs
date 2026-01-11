@@ -1,6 +1,7 @@
 pub mod config;
 pub mod db;
 pub mod engine;
+pub mod integrations;
 pub mod models;
 pub mod responses;
 pub mod routes;

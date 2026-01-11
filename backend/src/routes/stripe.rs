@@ -1525,6 +1525,7 @@ mod tests {
             workspace_oauth:
                 crate::services::oauth::workspace_service::WorkspaceOAuthService::test_stub(),
             stripe: stripe.clone(),
+            integration_registry: crate::state::test_integration_registry(),
             http_client: Arc::new(Client::new()),
             config: test_config(),
             worker_id: Arc::new("test-worker".into()),
@@ -1681,6 +1682,7 @@ mod tests {
             workspace_oauth:
                 crate::services::oauth::workspace_service::WorkspaceOAuthService::test_stub(),
             stripe: stripe.clone(),
+            integration_registry: crate::state::test_integration_registry(),
             http_client: Arc::new(Client::new()),
             config: test_config(),
             worker_id: Arc::new("test-worker".into()),
@@ -1790,6 +1792,7 @@ mod tests {
             workspace_oauth:
                 crate::services::oauth::workspace_service::WorkspaceOAuthService::test_stub(),
             stripe: stripe.clone(),
+            integration_registry: crate::state::test_integration_registry(),
             http_client: Arc::new(Client::new()),
             config: test_config(),
             worker_id: Arc::new("test-worker".into()),
@@ -1911,6 +1914,7 @@ mod tests {
             workspace_oauth:
                 crate::services::oauth::workspace_service::WorkspaceOAuthService::test_stub(),
             stripe: stripe.clone(),
+            integration_registry: crate::state::test_integration_registry(),
             http_client: Arc::new(Client::new()),
             config: test_config(),
             worker_id: Arc::new("test-worker".into()),
@@ -2053,6 +2057,7 @@ mod tests {
             workspace_oauth:
                 crate::services::oauth::workspace_service::WorkspaceOAuthService::test_stub(),
             stripe: stripe.clone(),
+            integration_registry: crate::state::test_integration_registry(),
             http_client: Arc::new(Client::new()),
             config: test_config(),
             worker_id: Arc::new("test-worker".into()),
@@ -2172,6 +2177,7 @@ mod tests {
             workspace_oauth:
                 crate::services::oauth::workspace_service::WorkspaceOAuthService::test_stub(),
             stripe: stripe.clone(),
+            integration_registry: crate::state::test_integration_registry(),
             http_client: Arc::new(Client::new()),
             config: test_config(),
             worker_id: Arc::new("test-worker".into()),

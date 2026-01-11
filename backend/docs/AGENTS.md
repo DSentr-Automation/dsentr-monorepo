@@ -6,6 +6,7 @@
 
 ## Files
 - `oauth_redirects.md`: documents the exact OAuth callback URLs and required environment variables for Google and Microsoft integrations. Use it when provisioning credentials in provider dashboards or setting up local `.env` files.
+- `integrations.md`: documents the IntegrationManifest contract, ownership/scope rules, and the step-by-step process for adding integrations.
 - `remove_duplicate_workspace_orgs.sql`: transactional cleanup script that deduplicates organizations/workspaces after the historical subscription bug. Always wrap execution in a manual transaction and review row counts before committing.
 
 ## Usage Tips
@@ -20,3 +21,4 @@
 - Added the Notion OAuth callback URL and env var list so credential setup stays aligned with the integration config.
 - Removed the legacy workflow webhook secret runbook after deprecating workflow-scoped webhook tokens.
 - Added an action registry note covering manifests, execution semantics, and no-branching rules for engine dispatch.
+- Added an integrations manifest guide so backend updates follow the manifest contract and avoid provider-specific routing changes.

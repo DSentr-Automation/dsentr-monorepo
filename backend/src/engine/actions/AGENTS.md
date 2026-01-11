@@ -13,7 +13,7 @@
 - `mod.rs`: Router that chooses between trigger/condition/action handlers and shared helpers (`parse_expression`, templating, etc.).
 
 ## Usage Tips
-- Keep new action modules stateless—pass everything via parameters and the shared `AppState`.
+- Keep new action modules stateless-pass everything via parameters and the shared `AppState`.
 - Validate all user-provided inputs before performing network calls; return `Err(String)` with actionable error messages so UI surfaces them cleanly.
 - Prefer adding small helper structs/functions within each module rather than extending `mod.rs` unless they are shared across actions.
 
@@ -53,3 +53,5 @@
 - Added per-action manifests (required fields + semantics) and centralized manifest-to-executor registration in the actions module.
 - Formatter validation now runs in the action validator (with config parsing), so execute_formatter assumes validated configs and registry resolution no longer carries required_fields.
 - Delay and formatter executors now live in their respective modules and implement ActionExecutor directly, keeping registry dispatch generic.
+- Action test fixtures now include the integration registry in AppState so shared state wiring stays consistent.
+- Normalized action error strings to ASCII (Settings -> Integrations) to fix encoding corruption.

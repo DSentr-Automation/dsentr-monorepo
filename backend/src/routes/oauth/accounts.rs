@@ -1,8 +1,9 @@
 use super::{
     helpers::{
-        map_oauth_error, parse_provider, ConnectionOwnerPayload, ConnectionsResponse,
-        PersonalConnectionPayload, ProviderGroupedConnections, RefreshResponse,
-        SlackPersonalAuthStatus, WorkspaceConnectionPayload, OAUTH_PLAN_RESTRICTION_MESSAGE,
+        integration_id_for_provider, is_workspace_first, manifest_payloads, map_oauth_error,
+        resolve_oauth_integration, supports_personal, ConnectionOwnerPayload, ConnectionsResponse,
+        PersonalAuthStatus, PersonalConnectionPayload, RefreshResponse, WorkspaceConnectionPayload,
+        OAUTH_PLAN_RESTRICTION_MESSAGE,
     },
     prelude::*,
 };
@@ -11,6 +12,7 @@ use crate::models::workspace::WorkspaceMembershipSummary;
 use crate::routes::auth::claims::Claims;
 use crate::services::oauth::account_service::StoredOAuthToken;
 use axum::http::StatusCode;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Deserialize)]
 pub struct ListConnectionsQuery {
@@ -103,7 +105,7 @@ async fn ensure_workspace_membership(
 pub async fn refresh_connection(
     State(state): State<AppState>,
     AuthSession(claims): AuthSession,
-    Path(provider): Path<String>,
+    Path(integration_id): Path<String>,
     query: Query<ConnectionTarget>,
     body: Option<Json<ConnectionTarget>>,
 ) -> Response {
@@ -112,12 +114,17 @@ pub async fn refresh_connection(
         return JsonResponse::bad_request("connection_id is required").into_response();
     };
 
-    let provider = match parse_provider(&provider) {
-        Some(p) => p,
-        None => {
-            return JsonResponse::bad_request("Unknown provider").into_response();
-        }
-    };
+    let (manifest, provider) =
+        match resolve_oauth_integration(state.integration_registry.as_ref(), &integration_id) {
+            Ok(result) => result,
+            Err(response) => return response,
+        };
+    if !supports_personal(manifest) {
+        return JsonResponse::bad_request(
+            "Personal connections are not supported for this integration",
+        )
+        .into_response();
+    }
 
     let user_id = match Uuid::parse_str(&claims.id) {
         Ok(id) => id,
@@ -168,7 +175,7 @@ pub async fn refresh_connection(
 pub async fn disconnect_connection(
     State(state): State<AppState>,
     AuthSession(claims): AuthSession,
-    Path(provider): Path<String>,
+    Path(integration_id): Path<String>,
     query: Query<ConnectionTarget>,
     body: Option<Json<ConnectionTarget>>,
 ) -> Response {
@@ -177,12 +184,17 @@ pub async fn disconnect_connection(
         return JsonResponse::bad_request("connection_id is required").into_response();
     };
 
-    let provider = match parse_provider(&provider) {
-        Some(p) => p,
-        None => {
-            return JsonResponse::bad_request("Unknown provider").into_response();
-        }
-    };
+    let (manifest, provider) =
+        match resolve_oauth_integration(state.integration_registry.as_ref(), &integration_id) {
+            Ok(result) => result,
+            Err(response) => return response,
+        };
+    if !supports_personal(manifest) {
+        return JsonResponse::bad_request(
+            "Personal connections are not supported for this integration",
+        )
+        .into_response();
+    }
     let user_id = match Uuid::parse_str(&claims.id) {
         Ok(id) => id,
         Err(_) => return JsonResponse::server_error("Invalid user identifier").into_response(),
@@ -274,39 +286,137 @@ pub async fn list_connections(
             .into_response();
     }
 
+    let registry = state.integration_registry.as_ref();
     let personal_owner = connection_owner_from_claims(user_id, &claims);
-    let mut slack_personal_auth = SlackPersonalAuthStatus::default();
-    let mut personal = ProviderGroupedConnections::default();
-    for token in personal_tokens {
-        if token.provider == ConnectedOAuthProvider::Slack {
-            slack_personal_auth.has_personal_auth = true;
-            let should_update = slack_personal_auth
-                .personal_auth_connected_at
-                .as_ref()
-                .is_none_or(|current| token.updated_at > *current);
-            if should_update {
-                slack_personal_auth.personal_auth_connected_at = Some(token.updated_at);
-            }
-        }
-        personal.push(
-            token.provider,
-            personal_payload_from_token(token, &personal_owner),
+    let mut personal = Vec::new();
+    let mut workspace = Vec::new();
+    let mut personal_auth: BTreeMap<String, PersonalAuthStatus> = BTreeMap::new();
+    let mut workspace_counts: BTreeMap<String, usize> = BTreeMap::new();
+
+    for manifest in registry
+        .iter()
+        .filter(|manifest| is_workspace_first(manifest))
+    {
+        personal_auth.insert(
+            manifest.integration_id.clone(),
+            PersonalAuthStatus::default(),
         );
     }
 
-    let mut workspace = ProviderGroupedConnections::default();
-    for connection in workspace_connections {
-        workspace.push(
-            connection.provider,
-            workspace_payload_from_listing(connection),
-        );
+    for token in personal_tokens {
+        let integration_id = match integration_id_for_provider(token.provider) {
+            Some(integration_id) => integration_id,
+            None => {
+                error!(
+                    provider = ?token.provider,
+                    "OAuth token provider missing from mapping table"
+                );
+                return JsonResponse::server_error("Unknown OAuth provider").into_response();
+            }
+        };
+        let manifest = match registry.get(integration_id) {
+            Some(manifest) => manifest,
+            None => {
+                error!(
+                    integration_id = %integration_id,
+                    "OAuth token provider missing from manifest registry"
+                );
+                return JsonResponse::server_error("Unknown OAuth provider").into_response();
+            }
+        };
+        if is_workspace_first(manifest) {
+            if let Some(status) = personal_auth.get_mut(&manifest.integration_id) {
+                status.has_personal_auth = true;
+                let should_update = status
+                    .personal_auth_connected_at
+                    .as_ref()
+                    .is_none_or(|current| token.updated_at > *current);
+                if should_update {
+                    status.personal_auth_connected_at = Some(token.updated_at);
+                }
+            }
+        }
+        personal.push(personal_payload_from_token(token, &personal_owner));
     }
+
+    for connection in workspace_connections {
+        let integration_id = match integration_id_for_provider(connection.provider) {
+            Some(integration_id) => integration_id,
+            None => {
+                error!(
+                    provider = ?connection.provider,
+                    "Workspace OAuth provider missing from mapping table"
+                );
+                return JsonResponse::server_error("Unknown OAuth provider").into_response();
+            }
+        };
+        let manifest = match registry.get(integration_id) {
+            Some(manifest) => manifest,
+            None => {
+                error!(
+                    integration_id = %integration_id,
+                    "Workspace OAuth provider missing from manifest registry"
+                );
+                return JsonResponse::server_error("Unknown OAuth provider").into_response();
+            }
+        };
+        let count = workspace_counts
+            .entry(manifest.integration_id.clone())
+            .or_insert(0);
+        *count += 1;
+        if manifest.provider_constraints.single_install_per_workspace && *count > 1 {
+            error!(
+                integration_id = %manifest.integration_id,
+                workspace_id = %params.workspace,
+                "Multiple workspace connections found for a single-install integration"
+            );
+            return JsonResponse::conflict(
+                "Only one workspace connection is supported for this integration",
+            )
+            .into_response();
+        }
+        workspace.push(workspace_payload_from_listing(connection));
+    }
+
+    for manifest in registry
+        .iter()
+        .filter(|manifest| is_workspace_first(manifest))
+    {
+        let has_personal = personal_auth
+            .get(&manifest.integration_id)
+            .map(|status| status.has_personal_auth)
+            .unwrap_or(false);
+        let workspace_count = workspace_counts
+            .get(&manifest.integration_id)
+            .copied()
+            .unwrap_or(0);
+        if has_personal && workspace_count == 0 {
+            error!(
+                integration_id = %manifest.integration_id,
+                workspace_id = %params.workspace,
+                "Workspace-first personal authorization missing a workspace connection"
+            );
+            return JsonResponse::conflict(
+                "Workspace connection required for personal authorization",
+            )
+            .into_response();
+        }
+    }
+
+    // Legacy slack field maps to the sole workspace-first entry for compatibility.
+    let slack = if personal_auth.len() == 1 {
+        personal_auth.values().next().cloned()
+    } else {
+        None
+    };
 
     Json(ConnectionsResponse {
         success: true,
         personal,
         workspace,
-        slack: slack_personal_auth,
+        personal_auth,
+        slack,
+        manifests: manifest_payloads(registry),
     })
     .into_response()
 }
@@ -314,15 +424,14 @@ pub async fn list_connections(
 pub async fn list_provider_connections(
     State(state): State<AppState>,
     AuthSession(claims): AuthSession,
-    Path(provider): Path<String>,
+    Path(integration_id): Path<String>,
     Query(params): Query<ListConnectionsQuery>,
 ) -> Response {
-    let provider = match parse_provider(&provider) {
-        Some(p) => p,
-        None => {
-            return JsonResponse::bad_request("Unknown provider").into_response();
-        }
-    };
+    let (_manifest, provider) =
+        match resolve_oauth_integration(state.integration_registry.as_ref(), &integration_id) {
+            Ok(result) => result,
+            Err(response) => return response,
+        };
 
     let user_id = match Uuid::parse_str(&claims.id) {
         Ok(id) => id,
@@ -461,16 +570,21 @@ pub async fn get_connection_by_id(
 pub async fn revoke_connection(
     State(state): State<AppState>,
     AuthSession(claims): AuthSession,
-    Path(provider): Path<String>,
+    Path(integration_id): Path<String>,
     query: Query<ConnectionTarget>,
     body: Option<Json<ConnectionTarget>>,
 ) -> Response {
-    let provider = match parse_provider(&provider) {
-        Some(p) => p,
-        None => {
-            return JsonResponse::bad_request("Unknown provider").into_response();
-        }
-    };
+    let (manifest, provider) =
+        match resolve_oauth_integration(state.integration_registry.as_ref(), &integration_id) {
+            Ok(result) => result,
+            Err(response) => return response,
+        };
+    if !supports_personal(manifest) {
+        return JsonResponse::bad_request(
+            "Personal connections are not supported for this integration",
+        )
+        .into_response();
+    }
 
     let user_id = match Uuid::parse_str(&claims.id) {
         Ok(id) => id,

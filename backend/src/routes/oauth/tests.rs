@@ -74,8 +74,8 @@ use super::{
     },
     helpers::{
         build_slack_state, build_state_cookie, error_message_for_redirect, handle_callback,
-        parse_provider, CallbackQuery, GOOGLE_STATE_COOKIE, NOTION_STATE_COOKIE,
-        OAUTH_PLAN_RESTRICTION_MESSAGE, SLACK_STATE_COOKIE, SLACK_WORKSPACE_REQUIRED_MESSAGE,
+        CallbackQuery, GOOGLE_STATE_COOKIE, NOTION_STATE_COOKIE, OAUTH_PLAN_RESTRICTION_MESSAGE,
+        SLACK_STATE_COOKIE, SLACK_WORKSPACE_REQUIRED_MESSAGE,
     },
     prelude::ConnectedOAuthProvider,
 };
@@ -132,6 +132,18 @@ fn stub_config() -> Arc<Config> {
     })
 }
 
+fn connections_for_provider<'a>(value: &'a Value, provider: &str) -> Vec<&'a Value> {
+    value
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter(|entry| entry.get("provider").and_then(Value::as_str) == Some(provider))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn stub_state(config: Arc<Config>) -> AppState {
     AppState {
         db: Arc::new(MockDb::default()),
@@ -146,6 +158,7 @@ fn stub_state(config: Arc<Config>) -> AppState {
         oauth_accounts: OAuthAccountService::test_stub(),
         workspace_oauth: WorkspaceOAuthService::test_stub(),
         stripe: Arc::new(crate::services::stripe::MockStripeService::new()),
+        integration_registry: crate::state::test_integration_registry(),
         http_client: Arc::new(reqwest::Client::new()),
         config,
         worker_id: Arc::new("test-worker".into()),
@@ -1286,9 +1299,7 @@ async fn list_connections_returns_personal_and_workspace_entries() {
     let json: Value = serde_json::from_slice(&body).expect("response json");
 
     assert_eq!(json["success"].as_bool(), Some(true));
-    let personal = json["personal"]["google"]
-        .as_array()
-        .expect("google personal array");
+    let personal = connections_for_provider(&json["personal"], "google");
     assert_eq!(personal.len(), 1);
     let personal_entry = &personal[0];
     let expected_personal_id = personal_token_id.to_string();
@@ -1327,9 +1338,7 @@ async fn list_connections_returns_personal_and_workspace_entries() {
         Some("user@example.com")
     );
 
-    let workspace = json["workspace"]["google"]
-        .as_array()
-        .expect("google workspace array");
+    let workspace = connections_for_provider(&json["workspace"], "google");
     assert_eq!(workspace.len(), 1);
     let workspace_entry = &workspace[0];
     let expected_workspace_id = workspace_connection_id.to_string();
@@ -1535,18 +1544,14 @@ async fn shared_workspace_member_does_not_receive_other_personal_tokens() {
         .expect("read body");
     let json: Value = serde_json::from_slice(&body).expect("response json");
 
-    let personal = json["personal"]["google"]
-        .as_array()
-        .expect("google personal array");
+    let personal = connections_for_provider(&json["personal"], "google");
     assert_eq!(personal.len(), 1);
     assert_eq!(
         personal[0]["accountEmail"].as_str(),
         Some("member@example.com")
     );
 
-    let workspace = json["workspace"]["google"]
-        .as_array()
-        .expect("google workspace array");
+    let workspace = connections_for_provider(&json["workspace"], "google");
     assert_eq!(workspace.len(), 1);
     assert_eq!(
         workspace[0]["accountEmail"].as_str(),
@@ -1616,10 +1621,11 @@ async fn promoted_connection_only_appears_in_workspace_list_for_non_owner() {
         .expect("read body");
     let json: Value = serde_json::from_slice(&body).expect("response json");
 
-    assert_eq!(json["personal"]["google"].as_array().unwrap().len(), 0);
-    let workspace = json["workspace"]["google"]
-        .as_array()
-        .expect("google workspace array");
+    assert_eq!(
+        connections_for_provider(&json["personal"], "google").len(),
+        0
+    );
+    let workspace = connections_for_provider(&json["workspace"], "google");
     assert_eq!(workspace.len(), 1);
     assert_eq!(
         workspace[0]["accountEmail"].as_str(),
@@ -1691,11 +1697,11 @@ async fn self_promotion_visibility_differs_for_owner_and_member() {
         .expect("read body");
     let owner_json: Value = serde_json::from_slice(&owner_body).expect("owner response json");
     assert_eq!(
-        owner_json["personal"]["google"].as_array().unwrap().len(),
+        connections_for_provider(&owner_json["personal"], "google").len(),
         1
     );
     assert_eq!(
-        owner_json["workspace"]["google"].as_array().unwrap().len(),
+        connections_for_provider(&owner_json["workspace"], "google").len(),
         1
     );
 
@@ -1718,14 +1724,14 @@ async fn self_promotion_visibility_differs_for_owner_and_member() {
         .await
         .expect("read body");
     let member_json: Value = serde_json::from_slice(&member_body).expect("member response json");
-    let member_personal = member_json["personal"]["google"].as_array().unwrap();
+    let member_personal = connections_for_provider(&member_json["personal"], "google");
     assert_eq!(member_personal.len(), 1);
     assert_eq!(
         member_personal[0]["accountEmail"].as_str(),
         Some("member@example.com")
     );
     assert_eq!(
-        member_json["workspace"]["google"].as_array().unwrap().len(),
+        connections_for_provider(&member_json["workspace"], "google").len(),
         1
     );
 }
@@ -1798,9 +1804,7 @@ async fn list_connections_includes_workspace_reconnect_flag() {
         .expect("read body");
     let json: Value = serde_json::from_slice(&body).expect("response json");
 
-    let workspace = json["workspace"]["microsoft"]
-        .as_array()
-        .expect("microsoft workspace array");
+    let workspace = connections_for_provider(&json["workspace"], "microsoft");
     assert_eq!(workspace.len(), 1);
     let entry = &workspace[0];
     assert_eq!(entry["requiresReconnect"].as_bool(), Some(true));
@@ -2806,25 +2810,6 @@ fn build_notion_state_token(
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
-#[test]
-fn parse_provider_handles_known_values() {
-    assert_eq!(
-        parse_provider("google"),
-        Some(ConnectedOAuthProvider::Google)
-    );
-    assert_eq!(
-        parse_provider("microsoft"),
-        Some(ConnectedOAuthProvider::Microsoft)
-    );
-    assert_eq!(parse_provider("slack"), Some(ConnectedOAuthProvider::Slack));
-    assert_eq!(parse_provider("asana"), Some(ConnectedOAuthProvider::Asana));
-    assert_eq!(
-        parse_provider("notion"),
-        Some(ConnectedOAuthProvider::Notion)
-    );
-    assert_eq!(parse_provider("unknown"), None);
-}
-
 #[tokio::test]
 async fn callback_with_mismatched_state_redirects_with_error() {
     let config = stub_config();
@@ -2843,6 +2828,7 @@ async fn callback_with_mismatched_state_redirects_with_error() {
         jar,
         query,
         ConnectedOAuthProvider::Google,
+        "google",
         GOOGLE_STATE_COOKIE,
     )
     .await;

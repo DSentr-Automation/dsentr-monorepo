@@ -1,15 +1,17 @@
 use super::{
     helpers::{
         build_slack_state, build_state_cookie, clear_state_cookie, error_message_for_redirect,
-        handle_callback, parse_slack_state, provider_to_key, redirect_success_with_workspace,
-        redirect_with_error, redirect_with_error_for_provider, redirect_with_error_with_workspace,
-        CallbackQuery, ASANA_AUTH_URL, ASANA_STATE_COOKIE, GOOGLE_AUTH_URL, GOOGLE_STATE_COOKIE,
-        MICROSOFT_AUTH_URL, MICROSOFT_STATE_COOKIE, NOTION_AUTH_URL, NOTION_STATE_COOKIE,
-        OAUTH_PLAN_RESTRICTION_MESSAGE, SLACK_AUTH_URL, SLACK_STATE_COOKIE,
-        SLACK_WORKSPACE_REQUIRED_MESSAGE,
+        handle_callback, parse_slack_state, redirect_success_with_workspace, redirect_with_error,
+        redirect_with_error_for_manifest, redirect_with_error_with_workspace,
+        resolve_oauth_integration, CallbackQuery, ASANA_AUTH_URL, ASANA_INTEGRATION_ID,
+        ASANA_STATE_COOKIE, GOOGLE_AUTH_URL, GOOGLE_INTEGRATION_ID, GOOGLE_STATE_COOKIE,
+        MICROSOFT_AUTH_URL, MICROSOFT_INTEGRATION_ID, MICROSOFT_STATE_COOKIE, NOTION_AUTH_URL,
+        NOTION_INTEGRATION_ID, NOTION_STATE_COOKIE, OAUTH_PLAN_RESTRICTION_MESSAGE, SLACK_AUTH_URL,
+        SLACK_INTEGRATION_ID, SLACK_STATE_COOKIE, SLACK_WORKSPACE_REQUIRED_MESSAGE,
     },
     prelude::*,
 };
+use crate::integrations::manifest::IntegrationManifest;
 use crate::models::workspace::WorkspaceRole;
 use crate::services::oauth::workspace_service::WorkspaceOAuthError;
 use base64::Engine as _;
@@ -97,7 +99,7 @@ async fn ensure_oauth_permissions(
     user_id: Uuid,
     claims_plan: Option<&str>,
     workspace: Option<Uuid>,
-    provider: ConnectedOAuthProvider,
+    manifest: &IntegrationManifest,
 ) -> Result<(), Response> {
     if let Some(workspace_id) = workspace {
         match state
@@ -111,9 +113,9 @@ async fn ensure_oauth_permissions(
                     .find(|m| m.workspace.id == workspace_id)
                 {
                     if matches!(membership.role, WorkspaceRole::Viewer) {
-                        return Err(redirect_with_error_for_provider(
+                        return Err(redirect_with_error_for_manifest(
                             &state.config,
-                            provider,
+                            manifest,
                             OAUTH_VIEWER_RESTRICTION_MESSAGE,
                             Some(workspace_id),
                         ));
@@ -122,9 +124,9 @@ async fn ensure_oauth_permissions(
                     let plan_tier =
                         NormalizedPlanTier::from_option(Some(membership.workspace.plan.as_str()));
                     if plan_tier.is_solo() {
-                        return Err(redirect_with_error_for_provider(
+                        return Err(redirect_with_error_for_manifest(
                             &state.config,
-                            provider,
+                            manifest,
                             OAUTH_PLAN_RESTRICTION_MESSAGE,
                             Some(workspace_id),
                         ));
@@ -133,18 +135,18 @@ async fn ensure_oauth_permissions(
                     return Ok(());
                 }
 
-                return Err(redirect_with_error_for_provider(
+                return Err(redirect_with_error_for_manifest(
                     &state.config,
-                    provider,
+                    manifest,
                     "You do not have access to this workspace.",
                     Some(workspace_id),
                 ));
             }
             Err(err) => {
                 error!(%user_id, %workspace_id, ?err, "failed to load workspace memberships");
-                return Err(redirect_with_error_for_provider(
+                return Err(redirect_with_error_for_manifest(
                     &state.config,
-                    provider,
+                    manifest,
                     OAUTH_WORKSPACE_ACCESS_ERROR_MESSAGE,
                     Some(workspace_id),
                 ));
@@ -154,9 +156,9 @@ async fn ensure_oauth_permissions(
 
     let plan_tier = state.resolve_plan_tier(user_id, claims_plan).await;
     if plan_tier.is_solo() {
-        return Err(redirect_with_error_for_provider(
+        return Err(redirect_with_error_for_manifest(
             &state.config,
-            provider,
+            manifest,
             OAUTH_PLAN_RESTRICTION_MESSAGE,
             None,
         ));
@@ -171,6 +173,13 @@ pub async fn google_connect_start(
     Query(params): Query<ConnectQuery>,
     jar: CookieJar,
 ) -> Response {
+    let integration_id = GOOGLE_INTEGRATION_ID;
+    let (manifest, _provider) =
+        match resolve_oauth_integration(state.integration_registry.as_ref(), integration_id) {
+            Ok(result) => result,
+            Err(response) => return response,
+        };
+
     match Uuid::parse_str(&claims.id) {
         Ok(user_id) => {
             if let Err(response) = ensure_oauth_permissions(
@@ -178,7 +187,7 @@ pub async fn google_connect_start(
                 user_id,
                 claims.plan.as_deref(),
                 params.workspace,
-                ConnectedOAuthProvider::Google,
+                manifest,
             )
             .await
             {
@@ -190,7 +199,7 @@ pub async fn google_connect_start(
             if plan_tier.is_solo() {
                 return redirect_with_error(
                     &state.config,
-                    ConnectedOAuthProvider::Google,
+                    integration_id,
                     OAUTH_PLAN_RESTRICTION_MESSAGE,
                 );
             }
@@ -220,12 +229,19 @@ pub async fn google_connect_callback(
     jar: CookieJar,
     Query(query): Query<CallbackQuery>,
 ) -> Response {
+    let integration_id = GOOGLE_INTEGRATION_ID;
+    let (_manifest, provider) =
+        match resolve_oauth_integration(state.integration_registry.as_ref(), integration_id) {
+            Ok(result) => result,
+            Err(response) => return response,
+        };
     handle_callback(
         state,
         claims,
         jar,
         query,
-        ConnectedOAuthProvider::Google,
+        provider,
+        integration_id,
         GOOGLE_STATE_COOKIE,
     )
     .await
@@ -237,6 +253,13 @@ pub async fn microsoft_connect_start(
     Query(params): Query<ConnectQuery>,
     jar: CookieJar,
 ) -> Response {
+    let integration_id = MICROSOFT_INTEGRATION_ID;
+    let (manifest, _provider) =
+        match resolve_oauth_integration(state.integration_registry.as_ref(), integration_id) {
+            Ok(result) => result,
+            Err(response) => return response,
+        };
+
     match Uuid::parse_str(&claims.id) {
         Ok(user_id) => {
             if let Err(response) = ensure_oauth_permissions(
@@ -244,7 +267,7 @@ pub async fn microsoft_connect_start(
                 user_id,
                 claims.plan.as_deref(),
                 params.workspace,
-                ConnectedOAuthProvider::Microsoft,
+                manifest,
             )
             .await
             {
@@ -256,7 +279,7 @@ pub async fn microsoft_connect_start(
             if plan_tier.is_solo() {
                 return redirect_with_error(
                     &state.config,
-                    ConnectedOAuthProvider::Microsoft,
+                    integration_id,
                     OAUTH_PLAN_RESTRICTION_MESSAGE,
                 );
             }
@@ -285,12 +308,19 @@ pub async fn microsoft_connect_callback(
     jar: CookieJar,
     Query(query): Query<CallbackQuery>,
 ) -> Response {
+    let integration_id = MICROSOFT_INTEGRATION_ID;
+    let (_manifest, provider) =
+        match resolve_oauth_integration(state.integration_registry.as_ref(), integration_id) {
+            Ok(result) => result,
+            Err(response) => return response,
+        };
     handle_callback(
         state,
         claims,
         jar,
         query,
-        ConnectedOAuthProvider::Microsoft,
+        provider,
+        integration_id,
         MICROSOFT_STATE_COOKIE,
     )
     .await
@@ -302,12 +332,19 @@ pub async fn slack_connect_start(
     Query(params): Query<ConnectQuery>,
     jar: CookieJar,
 ) -> Response {
+    let integration_id = SLACK_INTEGRATION_ID;
+    let (manifest, provider) =
+        match resolve_oauth_integration(state.integration_registry.as_ref(), integration_id) {
+            Ok(result) => result,
+            Err(response) => return response,
+        };
+
     let workspace_id = match params.workspace {
         Some(workspace_id) => workspace_id,
         None => {
-            return redirect_with_error_for_provider(
+            return redirect_with_error_for_manifest(
                 &state.config,
-                ConnectedOAuthProvider::Slack,
+                manifest,
                 SLACK_WORKSPACE_REQUIRED_MESSAGE,
                 None,
             );
@@ -319,7 +356,7 @@ pub async fn slack_connect_start(
         Err(_) => {
             return redirect_with_error_with_workspace(
                 &state.config,
-                ConnectedOAuthProvider::Slack,
+                integration_id,
                 "Invalid user",
                 Some(workspace_id),
             );
@@ -331,7 +368,7 @@ pub async fn slack_connect_start(
         user_id,
         claims.plan.as_deref(),
         Some(workspace_id),
-        ConnectedOAuthProvider::Slack,
+        manifest,
     )
     .await
     {
@@ -346,9 +383,9 @@ pub async fn slack_connect_start(
         {
             Ok(Some(connection)) => connection,
             Ok(None) => {
-                return redirect_with_error_for_provider(
+                return redirect_with_error_for_manifest(
                     &state.config,
-                    ConnectedOAuthProvider::Slack,
+                    manifest,
                     "Slack personal authorization requires a workspace Slack connection.",
                     Some(workspace_id),
                 );
@@ -360,21 +397,19 @@ pub async fn slack_connect_start(
                     ?err,
                     "failed to load workspace connection for Slack personal OAuth"
                 );
-                return redirect_with_error_for_provider(
+                return redirect_with_error_for_manifest(
                     &state.config,
-                    ConnectedOAuthProvider::Slack,
+                    manifest,
                     OAUTH_WORKSPACE_ACCESS_ERROR_MESSAGE,
                     Some(workspace_id),
                 );
             }
         };
 
-        if connection.workspace_id != workspace_id
-            || connection.provider != ConnectedOAuthProvider::Slack
-        {
-            return redirect_with_error_for_provider(
+        if connection.workspace_id != workspace_id || connection.provider != provider {
+            return redirect_with_error_for_manifest(
                 &state.config,
-                ConnectedOAuthProvider::Slack,
+                manifest,
                 "Slack personal authorization requires a workspace Slack connection.",
                 Some(workspace_id),
             );
@@ -390,14 +425,14 @@ pub async fn slack_connect_start(
 
     if params.workspace_connection_id.is_some() {
         info!(
-            provider = "slack",
+            provider = SLACK_INTEGRATION_ID,
             workspace_id = %workspace_id,
             user_scopes,
             "Starting Slack personal OAuth authorization"
         );
     } else {
         info!(
-            provider = "slack",
+            provider = SLACK_INTEGRATION_ID,
             workspace_id = %workspace_id,
             bot_scopes,
             user_scopes,
@@ -424,13 +459,23 @@ pub async fn slack_connect_callback(
     jar: CookieJar,
     Query(query): Query<CallbackQuery>,
 ) -> Response {
-    let provider = ConnectedOAuthProvider::Slack;
+    let integration_id = SLACK_INTEGRATION_ID;
+    let (manifest, provider) =
+        match resolve_oauth_integration(state.integration_registry.as_ref(), integration_id) {
+            Ok(result) => result,
+            Err(response) => return response,
+        };
     let workspace_hint = jar
         .get(SLACK_STATE_COOKIE)
         .and_then(|cookie| parse_slack_state(cookie.value()));
 
     if let Some(error) = query.error.clone().or(query.error_description.clone()) {
-        return redirect_with_error_with_workspace(&state.config, provider, &error, workspace_hint);
+        return redirect_with_error_with_workspace(
+            &state.config,
+            integration_id,
+            &error,
+            workspace_hint,
+        );
     }
 
     let code = match query.code.clone() {
@@ -438,7 +483,7 @@ pub async fn slack_connect_callback(
         None => {
             return redirect_with_error_with_workspace(
                 &state.config,
-                provider,
+                integration_id,
                 "Missing code",
                 workspace_hint,
             );
@@ -450,7 +495,7 @@ pub async fn slack_connect_callback(
         None => {
             return redirect_with_error_with_workspace(
                 &state.config,
-                provider,
+                integration_id,
                 "Missing state",
                 workspace_hint,
             );
@@ -462,7 +507,7 @@ pub async fn slack_connect_callback(
         None => {
             return redirect_with_error_with_workspace(
                 &state.config,
-                provider,
+                integration_id,
                 "Missing state",
                 workspace_hint,
             );
@@ -472,7 +517,7 @@ pub async fn slack_connect_callback(
     if provided_state != expected_state {
         return redirect_with_error_with_workspace(
             &state.config,
-            provider,
+            integration_id,
             "Invalid state",
             workspace_hint,
         );
@@ -484,7 +529,7 @@ pub async fn slack_connect_callback(
         None => {
             let response = redirect_with_error_with_workspace(
                 &state.config,
-                provider,
+                integration_id,
                 SLACK_WORKSPACE_REQUIRED_MESSAGE,
                 None,
             );
@@ -497,7 +542,7 @@ pub async fn slack_connect_callback(
         Err(_) => {
             let response = redirect_with_error_with_workspace(
                 &state.config,
-                provider,
+                integration_id,
                 "Invalid user",
                 Some(workspace_id),
             );
@@ -510,7 +555,7 @@ pub async fn slack_connect_callback(
         user_id,
         claims.plan.as_deref(),
         Some(workspace_id),
-        provider,
+        manifest,
     )
     .await
     {
@@ -527,7 +572,7 @@ pub async fn slack_connect_callback(
             error!("OAuth authorization exchange failed: {err}");
             let response = redirect_with_error_with_workspace(
                 &state.config,
-                provider,
+                integration_id,
                 &error_message_for_redirect(&err),
                 Some(workspace_id),
             );
@@ -538,7 +583,7 @@ pub async fn slack_connect_callback(
     if let Err(message) = validate_slack_bot_scopes(&state, &workspace_tokens.access_token).await {
         let response = redirect_with_error_with_workspace(
             &state.config,
-            provider,
+            integration_id,
             &message,
             Some(workspace_id),
         );
@@ -555,7 +600,7 @@ pub async fn slack_connect_callback(
             error!("Saving OAuth authorization failed: {err}");
             let response = redirect_with_error_with_workspace(
                 &state.config,
-                provider,
+                integration_id,
                 &error_message_for_redirect(&err),
                 Some(workspace_id),
             );
@@ -584,7 +629,7 @@ pub async fn slack_connect_callback(
         };
         let response = redirect_with_error_with_workspace(
             &state.config,
-            provider,
+            integration_id,
             &message,
             Some(workspace_id),
         );
@@ -593,7 +638,7 @@ pub async fn slack_connect_callback(
 
     (
         jar,
-        redirect_success_with_workspace(&state.config, provider, workspace_id),
+        redirect_success_with_workspace(&state.config, integration_id, workspace_id),
     )
         .into_response()
 }
@@ -773,6 +818,13 @@ pub async fn asana_connect_start(
     Query(params): Query<ConnectQuery>,
     jar: CookieJar,
 ) -> Response {
+    let integration_id = ASANA_INTEGRATION_ID;
+    let (manifest, _provider) =
+        match resolve_oauth_integration(state.integration_registry.as_ref(), integration_id) {
+            Ok(result) => result,
+            Err(response) => return response,
+        };
+
     match Uuid::parse_str(&claims.id) {
         Ok(user_id) => {
             if let Err(response) = ensure_oauth_permissions(
@@ -780,7 +832,7 @@ pub async fn asana_connect_start(
                 user_id,
                 claims.plan.as_deref(),
                 params.workspace,
-                ConnectedOAuthProvider::Asana,
+                manifest,
             )
             .await
             {
@@ -792,7 +844,7 @@ pub async fn asana_connect_start(
             if plan_tier.is_solo() {
                 return redirect_with_error(
                     &state.config,
-                    ConnectedOAuthProvider::Asana,
+                    integration_id,
                     OAUTH_PLAN_RESTRICTION_MESSAGE,
                 );
             }
@@ -820,12 +872,19 @@ pub async fn asana_connect_callback(
     jar: CookieJar,
     Query(query): Query<CallbackQuery>,
 ) -> Response {
+    let integration_id = ASANA_INTEGRATION_ID;
+    let (_manifest, provider) =
+        match resolve_oauth_integration(state.integration_registry.as_ref(), integration_id) {
+            Ok(result) => result,
+            Err(response) => return response,
+        };
     handle_callback(
         state,
         claims,
         jar,
         query,
-        ConnectedOAuthProvider::Asana,
+        provider,
+        integration_id,
         ASANA_STATE_COOKIE,
     )
     .await
@@ -837,14 +896,17 @@ pub async fn notion_connect_start(
     Query(params): Query<ConnectQuery>,
     jar: CookieJar,
 ) -> Response {
+    let integration_id = NOTION_INTEGRATION_ID;
+    let (manifest, _provider) =
+        match resolve_oauth_integration(state.integration_registry.as_ref(), integration_id) {
+            Ok(result) => result,
+            Err(response) => return response,
+        };
+
     let user_id = match Uuid::parse_str(&claims.id) {
         Ok(user_id) => user_id,
         Err(_) => {
-            return redirect_with_error(
-                &state.config,
-                ConnectedOAuthProvider::Notion,
-                "Invalid user",
-            );
+            return redirect_with_error(&state.config, integration_id, "Invalid user");
         }
     };
 
@@ -865,7 +927,7 @@ pub async fn notion_connect_start(
         user_id,
         claims.plan.as_deref(),
         workspace_id,
-        ConnectedOAuthProvider::Notion,
+        manifest,
     )
     .await
     {
@@ -911,31 +973,36 @@ pub async fn notion_connect_callback(
     jar: CookieJar,
     Query(query): Query<CallbackQuery>,
 ) -> Response {
-    let provider = ConnectedOAuthProvider::Notion;
+    let integration_id = NOTION_INTEGRATION_ID;
+    let (manifest, provider) =
+        match resolve_oauth_integration(state.integration_registry.as_ref(), integration_id) {
+            Ok(result) => result,
+            Err(response) => return response,
+        };
 
     if let Some(error) = query.error.clone().or(query.error_description.clone()) {
-        return redirect_with_error(&state.config, provider, &error);
+        return redirect_with_error(&state.config, integration_id, &error);
     }
 
     let code = match query.code.clone() {
         Some(code) => code,
         None => {
-            return redirect_with_error(&state.config, provider, "Missing code");
+            return redirect_with_error(&state.config, integration_id, "Missing code");
         }
     };
 
     let expected_state = match jar.get(NOTION_STATE_COOKIE) {
         Some(cookie) => cookie.value().to_string(),
-        None => return redirect_with_error(&state.config, provider, "Missing state"),
+        None => return redirect_with_error(&state.config, integration_id, "Missing state"),
     };
 
     let provided_state = match query.state.clone() {
         Some(state) => state,
-        None => return redirect_with_error(&state.config, provider, "Missing state"),
+        None => return redirect_with_error(&state.config, integration_id, "Missing state"),
     };
 
     if provided_state != expected_state {
-        return redirect_with_error(&state.config, provider, "Invalid state");
+        return redirect_with_error(&state.config, integration_id, "Invalid state");
     }
 
     let jar = clear_state_cookie(jar, NOTION_STATE_COOKIE);
@@ -943,7 +1010,8 @@ pub async fn notion_connect_callback(
     let state_payload = match decode_notion_state(&expected_state) {
         Some(payload) => payload,
         None => {
-            let response = redirect_with_error(&state.config, provider, "Invalid state payload");
+            let response =
+                redirect_with_error(&state.config, integration_id, "Invalid state payload");
             return (jar, response).into_response();
         }
     };
@@ -951,13 +1019,13 @@ pub async fn notion_connect_callback(
     let user_id = match Uuid::parse_str(&claims.id) {
         Ok(id) => id,
         Err(_) => {
-            let response = redirect_with_error(&state.config, provider, "Invalid user");
+            let response = redirect_with_error(&state.config, integration_id, "Invalid user");
             return (jar, response).into_response();
         }
     };
 
     if state_payload.user_id != user_id {
-        let response = redirect_with_error(&state.config, provider, "Invalid state");
+        let response = redirect_with_error(&state.config, integration_id, "Invalid state");
         return (jar, response).into_response();
     }
 
@@ -969,7 +1037,7 @@ pub async fn notion_connect_callback(
         user_id,
         claims.plan.as_deref(),
         workspace_id,
-        provider,
+        manifest,
     )
     .await
     {
@@ -984,8 +1052,11 @@ pub async fn notion_connect_callback(
         Ok(tokens) => tokens,
         Err(err) => {
             error!("OAuth authorization exchange failed: {err}");
-            let response =
-                redirect_with_error(&state.config, provider, &error_message_for_redirect(&err));
+            let response = redirect_with_error(
+                &state.config,
+                integration_id,
+                &error_message_for_redirect(&err),
+            );
             return (jar, response).into_response();
         }
     };
@@ -998,8 +1069,11 @@ pub async fn notion_connect_callback(
         Ok(token) => token,
         Err(err) => {
             error!("Saving OAuth authorization failed: {err}");
-            let response =
-                redirect_with_error(&state.config, provider, &error_message_for_redirect(&err));
+            let response = redirect_with_error(
+                &state.config,
+                integration_id,
+                &error_message_for_redirect(&err),
+            );
             return (jar, response).into_response();
         }
     };
@@ -1008,7 +1082,7 @@ pub async fn notion_connect_callback(
         let Some(workspace_id) = workspace_id else {
             let response = redirect_with_error(
                 &state.config,
-                provider,
+                integration_id,
                 "Workspace connection requires a workspace id",
             );
             return (jar, response).into_response();
@@ -1030,7 +1104,7 @@ pub async fn notion_connect_callback(
             };
             let response = redirect_with_error_with_workspace(
                 &state.config,
-                provider,
+                integration_id,
                 &message,
                 Some(workspace_id),
             );
@@ -1039,17 +1113,16 @@ pub async fn notion_connect_callback(
 
         (
             jar,
-            redirect_success_with_workspace(&state.config, provider, workspace_id),
+            redirect_success_with_workspace(&state.config, integration_id, workspace_id),
         )
             .into_response()
     } else {
         let response = if let Some(workspace_id) = workspace_id {
-            redirect_success_with_workspace(&state.config, provider, workspace_id)
+            redirect_success_with_workspace(&state.config, integration_id, workspace_id)
         } else {
             let url = format!(
                 "{}/dashboard?connected=true&provider={}",
-                state.config.frontend_origin,
-                provider_to_key(provider)
+                state.config.frontend_origin, integration_id
             );
             Redirect::to(&url)
         };
