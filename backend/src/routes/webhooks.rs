@@ -173,12 +173,12 @@ fn validate_event_type(event_type: &str) -> Result<(), Response> {
     }
     if event_type.split('.').any(|segment| {
         segment.is_empty()
-            || !segment
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+            || !segment.chars().all(|c| {
+                c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-'
+            })
     }) {
         return Err(JsonResponse::bad_request(
-            "event_type must be dot-separated lowercase letters or digits",
+            "event_type must be dot-separated lowercase letters, digits, underscores, or dashes",
         )
         .into_response());
     }
@@ -1502,6 +1502,11 @@ async fn handle_webhook_ingress(
     };
 
     Span::current().record("event_type", tracing::field::display(event_type));
+    info!(
+        source_id = %source.id,
+        event_type = event_type,
+        "webhook event accepted"
+    );
 
     if source.require_hmac {
         match validate_webhook_signature(encryption_key, &source, headers, raw_body, now) {
@@ -1673,6 +1678,12 @@ async fn handle_webhook_ingress(
         }
     };
 
+    info!(
+        source_id = %source.id,
+        %event_type,
+        matched_subscriptions = subscriptions.len(),
+        "webhook event routed"
+    );
     let subscriptions_matched = subscriptions.len();
     emit_histogram(METRIC_SUBSCRIPTIONS_MATCHED, subscriptions_matched as f64);
     emit_counter(
