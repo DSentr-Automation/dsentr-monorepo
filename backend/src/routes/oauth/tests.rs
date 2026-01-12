@@ -19,6 +19,8 @@ use crate::config::{
     Config, OAuthProviderConfig, OAuthSettings, StripeSettings, DEFAULT_WORKSPACE_MEMBER_LIMIT,
     DEFAULT_WORKSPACE_MONTHLY_RUN_LIMIT, RUNAWAY_LIMIT_5MIN,
 };
+use crate::integrations::manifest::TokenScope;
+use crate::integrations::registry::IntegrationRegistry;
 use crate::db::{
     mock_db::{MockDb, NoopWorkflowRepository, NoopWorkspaceRepository},
     mock_stripe_event_log_repository::MockStripeEventLogRepository,
@@ -74,8 +76,9 @@ use super::{
     },
     helpers::{
         build_slack_state, build_state_cookie, error_message_for_redirect, handle_callback,
-        CallbackQuery, GOOGLE_STATE_COOKIE, NOTION_STATE_COOKIE, OAUTH_PLAN_RESTRICTION_MESSAGE,
-        SLACK_STATE_COOKIE, SLACK_WORKSPACE_REQUIRED_MESSAGE,
+        oauth_provider_for_integration_id, CallbackQuery, GOOGLE_STATE_COOKIE,
+        NOTION_STATE_COOKIE, OAUTH_PLAN_RESTRICTION_MESSAGE, SLACK_STATE_COOKIE,
+        SLACK_WORKSPACE_REQUIRED_MESSAGE,
     },
     prelude::ConnectedOAuthProvider,
 };
@@ -285,6 +288,22 @@ fn build_list_connections_state(
     state.oauth_accounts = oauth_service;
     state.workspace_connection_repo = workspace_connections;
     state
+}
+
+fn workspace_first_personal_integration(
+    registry: &IntegrationRegistry,
+) -> (String, ConnectedOAuthProvider) {
+    let manifest = registry
+        .iter()
+        .find(|manifest| {
+            manifest.provider_constraints.workspace_first
+                && manifest.token_scope == TokenScope::PersonalAndWorkspace
+        })
+        .expect("workspace-first personal+workspace integration");
+    let integration_id = manifest.integration_id.clone();
+    let provider = oauth_provider_for_integration_id(&integration_id)
+        .expect("workspace-first integration should map to an OAuth provider");
+    (integration_id, provider)
 }
 
 fn claims_for(user_id: Uuid) -> Claims {
@@ -1399,6 +1418,125 @@ async fn list_connections_returns_personal_and_workspace_entries() {
         Some("alice@example.com")
     );
     assert_eq!(workspace_entry["requiresReconnect"].as_bool(), Some(false));
+}
+
+#[tokio::test]
+async fn list_connections_returns_personal_auth_without_workspace_connection() {
+    let config = stub_config();
+    let registry = crate::state::test_integration_registry();
+    let (integration_id, provider) = workspace_first_personal_integration(registry.as_ref());
+    let workspace_id = Uuid::new_v4();
+    let user_id = Uuid::new_v4();
+    let personal_updated_at = OffsetDateTime::now_utc() - Duration::minutes(12);
+
+    let personal_token = UserOAuthToken {
+        updated_at: personal_updated_at,
+        created_at: personal_updated_at - Duration::hours(1),
+        ..personal_token_fixture(&config, user_id, provider, "user@example.com", false)
+    };
+
+    let state = build_list_connections_state(
+        config.clone(),
+        vec![(
+            user_id,
+            workspace_membership(workspace_id, WorkspaceRole::Admin, "workspace"),
+        )],
+        vec![personal_token],
+        Vec::new(),
+    );
+
+    // Listing returns 200 with derived personal auth; enforcement lives in connect start/callback/execution.
+    let response = list_connections(
+        State(state),
+        AuthSession(claims_for(user_id)),
+        Query(ListConnectionsQuery {
+            workspace: workspace_id,
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    let json: Value = serde_json::from_slice(&body).expect("response json");
+
+    assert!(json.get("error").is_none());
+    assert_eq!(json["workspace"].as_array().map(Vec::len), Some(0));
+    let personal_auth = json["personalAuth"]
+        .as_object()
+        .expect("personal auth map");
+    let status = personal_auth
+        .get(integration_id.as_str())
+        .expect("personal auth entry");
+    assert_eq!(status["has_personal_auth"].as_bool(), Some(true));
+}
+
+#[tokio::test]
+async fn list_connections_personal_auth_connected_at_tracks_token_update() {
+    let config = stub_config();
+    let registry = crate::state::test_integration_registry();
+    let (integration_id, provider) = workspace_first_personal_integration(registry.as_ref());
+    let workspace_id = Uuid::new_v4();
+    let user_id = Uuid::new_v4();
+    let personal_updated_at = OffsetDateTime::now_utc() - Duration::minutes(18);
+
+    let personal_token = UserOAuthToken {
+        updated_at: personal_updated_at,
+        created_at: personal_updated_at - Duration::hours(2),
+        ..personal_token_fixture(&config, user_id, provider, "user@example.com", false)
+    };
+    let workspace_listing = workspace_connection_fixture(
+        workspace_id,
+        user_id,
+        Some(personal_token.id),
+        provider,
+        "shared@example.com",
+        false,
+        ("Owner", "User", "owner@example.com"),
+    );
+
+    let state = build_list_connections_state(
+        config.clone(),
+        vec![(
+            user_id,
+            workspace_membership(workspace_id, WorkspaceRole::Admin, "workspace"),
+        )],
+        vec![personal_token],
+        vec![(user_id, workspace_listing)],
+    );
+
+    let response = list_connections(
+        State(state),
+        AuthSession(claims_for(user_id)),
+        Query(ListConnectionsQuery {
+            workspace: workspace_id,
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    let json: Value = serde_json::from_slice(&body).expect("response json");
+
+    assert!(json.get("error").is_none());
+    assert_eq!(json["workspace"].as_array().map(Vec::len), Some(1));
+    let personal_auth = json["personalAuth"]
+        .as_object()
+        .expect("personal auth map");
+    let status = personal_auth
+        .get(integration_id.as_str())
+        .expect("personal auth entry");
+    assert_eq!(status["has_personal_auth"].as_bool(), Some(true));
+    let expected_connected_at = personal_updated_at
+        .format(&Rfc3339)
+        .expect("format personal auth connected at");
+    assert_eq!(
+        status["personal_auth_connected_at"].as_str(),
+        Some(expected_connected_at.as_str())
+    );
 }
 
 #[tokio::test]

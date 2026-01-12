@@ -53,3 +53,5 @@
 - OAuth route test fixtures now include the integration registry in AppState to stay aligned with shared state wiring.
 - OAuth routes now resolve integrations by ID, map OAuth providers in a routing-local helper, return flat connection arrays, and include manifest metadata plus a generic personal-auth map for workspace-first integrations.
 - OAuth routes now share a single integration-resolution helper, use integration-id constants in connect handlers, and align path errors on "integration" terminology.
+- OAuth connections listing no longer 409s when workspace-first personal auth exists without a workspace connection; it now returns success and preserves derived personal auth state.
+- Added list-connections regression tests to assert workspace-first personal auth returns 200 without workspace connections and uses token updated_at for personal_auth_connected_at.

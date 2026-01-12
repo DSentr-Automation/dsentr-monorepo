@@ -378,31 +378,6 @@ pub async fn list_connections(
         workspace.push(workspace_payload_from_listing(connection));
     }
 
-    for manifest in registry
-        .iter()
-        .filter(|manifest| is_workspace_first(manifest))
-    {
-        let has_personal = personal_auth
-            .get(&manifest.integration_id)
-            .map(|status| status.has_personal_auth)
-            .unwrap_or(false);
-        let workspace_count = workspace_counts
-            .get(&manifest.integration_id)
-            .copied()
-            .unwrap_or(0);
-        if has_personal && workspace_count == 0 {
-            error!(
-                integration_id = %manifest.integration_id,
-                workspace_id = %params.workspace,
-                "Workspace-first personal authorization missing a workspace connection"
-            );
-            return JsonResponse::conflict(
-                "Workspace connection required for personal authorization",
-            )
-            .into_response();
-        }
-    }
-
     // Legacy slack field maps to the sole workspace-first entry for compatibility.
     let slack = if personal_auth.len() == 1 {
         personal_auth.values().next().cloned()
