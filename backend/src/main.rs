@@ -41,6 +41,7 @@ use routes::auth::{
 };
 use routes::{
     account::{confirm_account_deletion, get_account_deletion_summary, request_account_deletion},
+    actions::list_actions,
     asana::{
         list_projects as list_asana_projects, list_sections as list_asana_sections,
         list_tags as list_asana_tags, list_task_stories as list_asana_task_stories,
@@ -117,6 +118,7 @@ use crate::db::{
     workspace_connection_repository::WorkspaceConnectionRepository,
     workspace_repository::WorkspaceRepository,
 };
+use crate::engine::actions::init_action_manifest_registry;
 use crate::integrations::build_integration_registry;
 use crate::routes::asana::get_task_details;
 use crate::services::pluggable_mailer::PluggableMailer;
@@ -338,6 +340,11 @@ async fn main() -> Result<()> {
     if let Err(message) = assert_oauth_provider_mappings(integration_registry.as_ref()) {
         tracing::error!(%message, "OAuth provider mapping validation failed");
         return Err(anyhow!(message));
+    }
+
+    if let Err(error) = init_action_manifest_registry() {
+        tracing::error!(error = %error, "Failed to load action manifests");
+        return Err(anyhow!(error));
     }
 
     let state = AppState {
@@ -769,6 +776,10 @@ async fn main() -> Result<()> {
         .route("/api/dashboard", get(dashboard_handler))
         .layer(session_guard.clone());
 
+    let actions_routes = Router::new()
+        .route("/actions", get(list_actions))
+        .layer(session_guard.clone());
+
     let app = Router::new()
         .route("/", get(root))
         .route(
@@ -791,6 +802,7 @@ async fn main() -> Result<()> {
         .nest("/api/workspaces", workspace_routes)
         .merge(Router::new().nest("/api", webhook_subscription_routes))
         .merge(dashboard_routes)
+        .merge(Router::new().nest("/api", actions_routes))
         .merge(Router::new().nest("/api", invite_routes))
         .merge(Router::new().nest("/api", issue_routes))
         .nest("/api/oauth", oauth_routes)

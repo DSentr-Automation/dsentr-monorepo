@@ -56,3 +56,4 @@
 - Action test fixtures now include the integration registry in AppState so shared state wiring stays consistent.
 - Normalized action error strings to ASCII (Settings -> Integrations) to fix encoding corruption.
 - Added startup-loaded JSON action manifests that map to existing executors so new HTTP action nodes can be registered without new Rust action modules.
+- Added an action manifest registry accessor so routes can expose a read-only action catalog without touching executor logic.

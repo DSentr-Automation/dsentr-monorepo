@@ -1,11 +1,13 @@
 use std::collections::HashSet;
+use std::sync::OnceLock;
 
 use include_dir::{include_dir, Dir};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::registry::ActionAlias;
 
 static ACTION_MANIFEST_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/src/action_manifests");
+static ACTION_MANIFEST_REGISTRY: OnceLock<ActionManifestRegistry> = OnceLock::new();
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -17,7 +19,7 @@ pub(crate) struct ActionManifestSpec {
     pub http: HttpManifest,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UiMetadata {
     pub label: String,
@@ -26,7 +28,7 @@ pub(crate) struct UiMetadata {
     pub icon: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
 pub(crate) struct ActionInput {
@@ -59,6 +61,94 @@ pub(crate) struct HttpManifest {
 pub(crate) struct KeyValuePair {
     pub key: String,
     pub value: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub(crate) struct ActionManifestEntry {
+    pub action_id: String,
+    pub executor: String,
+    pub ui: UiMetadata,
+    pub inputs: Vec<ActionInput>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ActionManifestRegistry {
+    entries: Vec<ActionManifestEntry>,
+}
+
+impl ActionManifestRegistry {
+    pub(crate) fn entries(&self) -> &[ActionManifestEntry] {
+        &self.entries
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn empty() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn init_action_manifest_registry() -> Result<(), String> {
+    if ACTION_MANIFEST_REGISTRY.get().is_some() {
+        return Ok(());
+    }
+
+    let registry = load_action_manifest_registry()?;
+    ACTION_MANIFEST_REGISTRY
+        .set(registry)
+        .map_err(|_| "Action manifest registry already initialized".to_string())?;
+    Ok(())
+}
+
+pub(crate) fn action_manifest_registry() -> &'static ActionManifestRegistry {
+    ACTION_MANIFEST_REGISTRY.get_or_init(|| {
+        load_action_manifest_registry()
+            .unwrap_or_else(|error| panic!("Failed to load action manifests: {}", error))
+    })
+}
+
+fn load_action_manifest_registry() -> Result<ActionManifestRegistry, String> {
+    let mut entries = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    for file in ACTION_MANIFEST_DIR.files() {
+        if !is_json_file(file.path()) {
+            return Err(format!(
+                "{}: only .json manifests are allowed",
+                file.path().display()
+            ));
+        }
+
+        let manifest: ActionManifestSpec = serde_json::from_slice(file.contents())
+            .map_err(|err| format!("{}: failed to parse manifest: {err}", file.path().display()))?;
+
+        validate_manifest(&manifest)
+            .map_err(|err| format!("{}: invalid manifest: {err}", file.path().display()))?;
+
+        let action_id = normalize_id(&manifest.action_id);
+        if !seen.insert(action_id.clone()) {
+            return Err(format!(
+                "{}: duplicate action_id `{}`",
+                file.path().display(),
+                action_id
+            ));
+        }
+
+        let executor = normalize_id(&manifest.executor);
+
+        entries.push(ActionManifestEntry {
+            action_id,
+            executor,
+            ui: manifest.ui,
+            inputs: manifest.inputs,
+        });
+    }
+
+    entries.sort_by(|left, right| left.action_id.cmp(&right.action_id));
+
+    Ok(ActionManifestRegistry { entries })
 }
 
 pub(crate) fn load_action_manifest_aliases() -> Result<Vec<ActionAlias>, String> {

@@ -61,3 +61,4 @@
 - Test integration registry helpers now build the default manifests so OAuth route tests can resolve provider metadata.
 - Main now validates the OAuth provider mapping against the integration registry at startup to fail fast on missing mappings.
 - Added embedded action manifest loading under `src/action_manifests` so custom action nodes can be registered without per-node Rust code.
+- Initialized a shared action manifest registry at startup and exposed it via AppState helpers for the new catalog route.

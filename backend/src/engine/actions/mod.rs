@@ -24,7 +24,11 @@ use crate::engine::templating::templ_str;
 use crate::state::AppState;
 
 use super::graph::Node;
-pub(crate) use manifest::load_action_manifest_aliases;
+#[allow(unused_imports)]
+pub(crate) use manifest::{
+    action_manifest_registry, init_action_manifest_registry, load_action_manifest_aliases,
+    ActionManifestRegistry,
+};
 
 pub(crate) const TRIGGER_MANIFEST: ActionManifest = ActionManifest {
     action_type: "trigger",

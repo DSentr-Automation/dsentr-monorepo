@@ -71,6 +71,12 @@ pub enum WorkspaceLimitError {
 }
 
 impl AppState {
+    pub(crate) fn action_manifest_registry(
+        &self,
+    ) -> &'static crate::engine::actions::ActionManifestRegistry {
+        crate::engine::actions::action_manifest_registry()
+    }
+
     pub async fn resolve_plan_tier(
         &self,
         user_id: Uuid,
