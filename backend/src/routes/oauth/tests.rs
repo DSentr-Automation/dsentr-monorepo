@@ -19,8 +19,6 @@ use crate::config::{
     Config, OAuthProviderConfig, OAuthSettings, StripeSettings, DEFAULT_WORKSPACE_MEMBER_LIMIT,
     DEFAULT_WORKSPACE_MONTHLY_RUN_LIMIT, RUNAWAY_LIMIT_5MIN,
 };
-use crate::integrations::manifest::TokenScope;
-use crate::integrations::registry::IntegrationRegistry;
 use crate::db::{
     mock_db::{MockDb, NoopWorkflowRepository, NoopWorkspaceRepository},
     mock_stripe_event_log_repository::MockStripeEventLogRepository,
@@ -31,6 +29,8 @@ use crate::db::{
     },
     workspace_repository::{WorkspaceRepository, WorkspaceRunQuotaUpdate, WorkspaceRunUsage},
 };
+use crate::integrations::manifest::TokenScope;
+use crate::integrations::registry::IntegrationRegistry;
 use crate::models::oauth_token::{UserOAuthToken, WorkspaceAuditEvent, WorkspaceConnection};
 use crate::models::plan::PlanTier;
 use crate::models::user::UserRole;
@@ -76,9 +76,8 @@ use super::{
     },
     helpers::{
         build_slack_state, build_state_cookie, error_message_for_redirect, handle_callback,
-        oauth_provider_for_integration_id, CallbackQuery, GOOGLE_STATE_COOKIE,
-        NOTION_STATE_COOKIE, OAUTH_PLAN_RESTRICTION_MESSAGE, SLACK_STATE_COOKIE,
-        SLACK_WORKSPACE_REQUIRED_MESSAGE,
+        oauth_provider_for_integration_id, CallbackQuery, GOOGLE_STATE_COOKIE, NOTION_STATE_COOKIE,
+        OAUTH_PLAN_RESTRICTION_MESSAGE, SLACK_STATE_COOKIE, SLACK_WORKSPACE_REQUIRED_MESSAGE,
     },
     prelude::ConnectedOAuthProvider,
 };
@@ -1463,9 +1462,7 @@ async fn list_connections_returns_personal_auth_without_workspace_connection() {
 
     assert!(json.get("error").is_none());
     assert_eq!(json["workspace"].as_array().map(Vec::len), Some(0));
-    let personal_auth = json["personalAuth"]
-        .as_object()
-        .expect("personal auth map");
+    let personal_auth = json["personalAuth"].as_object().expect("personal auth map");
     let status = personal_auth
         .get(integration_id.as_str())
         .expect("personal auth entry");
@@ -1523,9 +1520,7 @@ async fn list_connections_personal_auth_connected_at_tracks_token_update() {
 
     assert!(json.get("error").is_none());
     assert_eq!(json["workspace"].as_array().map(Vec::len), Some(1));
-    let personal_auth = json["personalAuth"]
-        .as_object()
-        .expect("personal auth map");
+    let personal_auth = json["personalAuth"].as_object().expect("personal auth map");
     let status = personal_auth
         .get(integration_id.as_str())
         .expect("personal auth entry");

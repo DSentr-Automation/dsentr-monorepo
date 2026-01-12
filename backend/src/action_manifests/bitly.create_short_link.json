@@ -1,0 +1,36 @@
+{
+  "action_id": "bitly.create_short_link",
+  "executor": "http",
+  "ui": {
+    "label": "Create short link",
+    "description": "Shorten a URL with Bitly.",
+    "category": "Bitly",
+    "icon": "bitly"
+  },
+  "inputs": [
+    {
+      "name": "long_url",
+      "label": "Long URL",
+      "type": "string",
+      "required": true
+    }
+  ],
+  "http": {
+    "method": "POST",
+    "url": "https://api-ssl.bitly.com/v4/shorten",
+    "headers": [
+      {
+        "key": "Authorization",
+        "value": "Bearer {{secrets.bitly.token}}"
+      },
+      {
+        "key": "Content-Type",
+        "value": "application/json"
+      }
+    ],
+    "queryParams": [],
+    "bodyType": "json",
+    "body": "{\"long_url\": \"{{inputs.long_url}}\"}",
+    "formBody": []
+  }
+}

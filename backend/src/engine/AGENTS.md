@@ -39,3 +39,4 @@
 - Executor entrypoints are now crate-scoped to keep the action registry internal while still allowing the worker to dispatch runs.
 - Executor tests now avoid redundant JSON imports so test builds stay warning-free.
 - Executor test scaffolding now seeds the integration registry in AppState to align with the new startup wiring.
+- Engine startup now loads JSON action manifests and maps them to existing executors so custom action nodes resolve during registry construction.

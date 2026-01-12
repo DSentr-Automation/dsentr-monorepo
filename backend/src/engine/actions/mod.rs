@@ -5,6 +5,7 @@ mod email;
 pub(crate) mod formatter;
 mod google;
 mod http;
+mod manifest;
 mod messaging;
 mod notion;
 pub(crate) mod registry;
@@ -23,6 +24,7 @@ use crate::engine::templating::templ_str;
 use crate::state::AppState;
 
 use super::graph::Node;
+pub(crate) use manifest::load_action_manifest_aliases;
 
 pub(crate) const TRIGGER_MANIFEST: ActionManifest = ActionManifest {
     action_type: "trigger",

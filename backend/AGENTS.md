@@ -59,3 +59,4 @@ itly coordinated.
 - Added a Slack channel listing endpoint that validates personal or workspace OAuth tokens, enforces workspace plan/membership rules, and paginates Slack API responses so channel dropdowns stay in sync with connected accounts.
 - Added an `OAUTH_REQUIRE_CONNECTION_ID` toggle so OAuth refresh/disconnect/revoke routes can require explicit `connection_id` inputs while still warning on implicit lookups by default.
 - Update github backend build to push to a docker dev repo
+- Added compile-time embedded action manifests so new action nodes can be added via JSON without new executor code.

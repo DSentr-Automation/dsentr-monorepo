@@ -63,6 +63,11 @@ pub(crate) struct ActionDefinition {
     pub(crate) validator: Option<Arc<dyn ActionValidator>>,
 }
 
+pub(crate) struct ActionAlias {
+    pub(crate) action_type: String,
+    pub(crate) executor_action_type: String,
+}
+
 pub(crate) struct ActionResolution<'a> {
     pub(crate) action_type: &'a str,
     pub(crate) semantics: ActionExecutionSemantics,
@@ -87,6 +92,7 @@ impl ActionRegistry {
         definitions: Vec<ActionDefinition>,
         kind_aliases: Vec<(&'static str, &'static str)>,
         required_action_types: &[&'static str],
+        action_aliases: Vec<ActionAlias>,
     ) -> Self {
         let mut actions: HashMap<String, ActionEntry> = HashMap::new();
         for definition in definitions {
@@ -122,6 +128,34 @@ impl ActionRegistry {
             if !actions.contains_key(&required_key) {
                 panic!("Missing action registration for `{}`", required_key);
             }
+        }
+
+        for alias in action_aliases {
+            let alias_key = normalize(&alias.action_type);
+            let executor_key = normalize(&alias.executor_action_type);
+            if alias_key.is_empty() {
+                panic!("Action alias type is required");
+            }
+            if actions.contains_key(&alias_key) {
+                panic!("Duplicate action_type registration: {}", alias_key);
+            }
+
+            let target = actions.get(&executor_key).unwrap_or_else(|| {
+                panic!(
+                    "Action alias `{}` references unregistered action `{}`",
+                    alias_key, executor_key
+                )
+            });
+
+            actions.insert(
+                alias_key.clone(),
+                ActionEntry {
+                    action_type: alias_key,
+                    semantics: target.semantics,
+                    executor: target.executor.clone(),
+                    validator: target.validator.clone(),
+                },
+            );
         }
 
         let mut aliases: HashMap<String, String> = HashMap::new();
