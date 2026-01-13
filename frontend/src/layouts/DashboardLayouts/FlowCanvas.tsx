@@ -4,7 +4,8 @@ import {
   useEffect,
   useRef,
   useState,
-  type DragEvent
+  type DragEvent,
+  type ComponentType
 } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 import {
@@ -28,19 +29,7 @@ import {
 import TriggerNode, {
   type TriggerNodeData
 } from '@/components/workflow/TriggerNode'
-import {
-  SendGridActionNode,
-  MailgunActionNode,
-  AmazonSesActionNode,
-  SlackActionNode,
-  TeamsActionNode,
-  GoogleChatActionNode,
-  GoogleSheetsActionNode,
-  HttpRequestActionNode,
-  RunCustomCodeActionNode,
-  AsanaActionNode,
-  NotionActionNode
-} from '@/components/workflow/nodes'
+import { GenericActionNode } from '@/components/workflow/nodes'
 import NodeEdge from '@/components/workflow/NodeEdge'
 import CustomControls from '@/components/ui/ReactFlow/CustomControl'
 import ConditionNode, {
@@ -110,17 +99,6 @@ import {
   type FormatterConfig
 } from '@/components/actions/logic/FormatterNode/helpers'
 import TriggerTypeDropdown from '@/components/workflow/TriggerTypeDropdown'
-import SendGridAction from '@/components/workflow/Actions/Email/Services/SendGridAction'
-import MailGunAction from '@/components/workflow/Actions/Email/Services/MailGunAction'
-import AmazonSESAction from '@/components/workflow/Actions/Email/Services/AmazonSESAction'
-import SlackAction from '@/components/workflow/Actions/Messaging/Services/SlackAction'
-import TeamsAction from '@/components/workflow/Actions/Messaging/Services/TeamsAction'
-import GoogleChatAction from '@/components/workflow/Actions/Messaging/Services/GoogleChatAction'
-import SheetsAction from '@/components/workflow/Actions/Google/SheetsAction'
-import HttpRequestAction from '@/components/workflow/Actions/HttpRequestAction'
-import RunCustomCodeAction from '@/components/workflow/Actions/RunCustomCodeAction'
-import AsanaAction from '@/components/workflow/Actions/Asana/AsanaAction'
-import NotionAction from '@/components/workflow/Actions/Notion/NotionAction'
 import useActionNodeController, {
   type ActionNodeData
 } from '@/components/workflow/nodes/useActionNodeController'
@@ -128,6 +106,12 @@ import useMessagingActionRestriction from '@/components/workflow/nodes/useMessag
 import { errorMessage } from '@/lib/errorMessage'
 import type { RunAvailability } from '@/types/runAvailability'
 import { shallow } from 'zustand/shallow'
+import {
+  useActionRegistry,
+  type ActionDefinition,
+  type ActionNodeRendererProps,
+  DEFAULT_ACTION_ID
+} from '@/stores/actionRegistry'
 
 const SCHEDULE_RESTRICTION_MESSAGE =
   'Scheduled triggers are available on workspace plans and above. Switch this trigger to Manual or Webhook to keep running on the solo plan.'
@@ -167,31 +151,7 @@ type FormatterNodeRendererProps = NodeProps<Node<FormatterNodeData>> & {
   canEdit?: boolean
 }
 
-type ActionNodeRendererProps = NodeProps<Node<ActionNodeData>> & {
-  onRun?: (id: string, params: unknown) => Promise<void>
-  isRunning?: boolean
-  isSucceeded?: boolean
-  isFailed?: boolean
-  canEdit?: boolean
-  planTier?: string | null
-  onRestrictionNotice?: (message: string) => void
-  runAvailability?: RunAvailability
-}
-
 type WorkflowEdgeRendererProps = EdgeProps<WorkflowEdge>
-
-type ActionDropSubtype =
-  | 'actionEmailSendgrid'
-  | 'actionEmailMailgun'
-  | 'actionEmailAmazonSes'
-  | 'actionSlack'
-  | 'actionTeams'
-  | 'actionGoogleChat'
-  | 'actionSheets'
-  | 'actionHttp'
-  | 'actionCode'
-  | 'actionAsana'
-  | 'actionNotion'
 type LogicDropSubtype = 'delay' | 'formatter'
 
 interface DropDescriptor {
@@ -200,332 +160,6 @@ interface DropDescriptor {
   idPrefix: string
   expanded: boolean
   data: WorkflowNodeData
-}
-
-type ActionDropConfig = {
-  nodeType: ActionDropSubtype
-  labelBase: string
-  idPrefix: string
-  expanded: boolean
-  createData: () => ActionNodeData
-}
-
-const ACTION_NODE_DROP_CONFIG: Record<ActionDropSubtype, ActionDropConfig> = {
-  actionEmailSendgrid: {
-    nodeType: 'actionEmailSendgrid',
-    labelBase: 'SendGrid email',
-    idPrefix: 'action-email-sendgrid',
-    expanded: true,
-    createData: () => ({
-      actionType: 'email',
-      emailProvider: 'sendgrid',
-      params: {
-        apiKey: '',
-        from: '',
-        to: '',
-        templateId: '',
-        substitutions: [],
-        subject: '',
-        body: ''
-      },
-      timeout: 5000,
-      retries: 0,
-      stopOnError: true
-    })
-  },
-  actionEmailMailgun: {
-    nodeType: 'actionEmailMailgun',
-    labelBase: 'Mailgun email',
-    idPrefix: 'action-email-mailgun',
-    expanded: true,
-    createData: () => ({
-      actionType: 'email',
-      emailProvider: 'mailgun',
-      params: {
-        domain: '',
-        apiKey: '',
-        region: 'US (api.mailgun.net)',
-        from: '',
-        to: '',
-        subject: '',
-        body: '',
-        template: '',
-        variables: []
-      },
-      timeout: 5000,
-      retries: 0,
-      stopOnError: true
-    })
-  },
-  actionEmailAmazonSes: {
-    nodeType: 'actionEmailAmazonSes',
-    labelBase: 'Amazon SES email',
-    idPrefix: 'action-email-amazon-ses',
-    expanded: true,
-    createData: () => ({
-      actionType: 'email',
-      emailProvider: 'amazon_ses',
-      params: {
-        awsAccessKey: '',
-        awsSecretKey: '',
-        awsRegion: 'us-east-1',
-        sesVersion: 'v2',
-        fromEmail: '',
-        toEmail: '',
-        subject: '',
-        body: '',
-        template: '',
-        templateVariables: []
-      },
-      timeout: 5000,
-      retries: 0,
-      stopOnError: true
-    })
-  },
-  actionSlack: {
-    nodeType: 'actionSlack',
-    labelBase: 'Slack message',
-    idPrefix: 'action-slack',
-    expanded: true,
-    createData: () => ({
-      actionType: 'slack',
-      params: {
-        channel: '',
-        message: '',
-        token: '',
-        connectionScope: '',
-        connectionId: '',
-        accountEmail: ''
-      },
-      timeout: 5000,
-      retries: 0,
-      stopOnError: true
-    })
-  },
-  actionTeams: {
-    nodeType: 'actionTeams',
-    labelBase: 'Teams message',
-    idPrefix: 'action-teams',
-    expanded: true,
-    createData: () => ({
-      actionType: 'teams',
-      params: {
-        deliveryMethod: 'Incoming Webhook',
-        webhookType: 'Connector',
-        webhookUrl: '',
-        message: '',
-        summary: '',
-        title: '',
-        themeColor: '',
-        oauthProvider: '',
-        oauthConnectionScope: '',
-        oauthConnectionId: '',
-        oauthAccountEmail: '',
-        cardJson: '',
-        cardMode: 'Simple card builder',
-        cardTitle: '',
-        cardBody: '',
-        workflowOption: 'Basic (Raw JSON)',
-        workflowRawJson: '',
-        workflowHeaderName: '',
-        workflowHeaderSecret: '',
-        teamId: '',
-        teamName: '',
-        channelId: '',
-        channelName: '',
-        messageType: 'Text',
-        mentions: []
-      },
-      timeout: 5000,
-      retries: 0,
-      stopOnError: true
-    })
-  },
-  actionGoogleChat: {
-    nodeType: 'actionGoogleChat',
-    labelBase: 'Google Chat message',
-    idPrefix: 'action-google-chat',
-    expanded: true,
-    createData: () => ({
-      actionType: 'googlechat',
-      params: {
-        webhookUrl: '',
-        message: '',
-        cardJson: ''
-      },
-      timeout: 5000,
-      retries: 0,
-      stopOnError: true
-    })
-  },
-  actionSheets: {
-    nodeType: 'actionSheets',
-    labelBase: 'Google Sheets row',
-    idPrefix: 'action-sheets',
-    expanded: true,
-    createData: () => ({
-      actionType: 'sheets',
-      params: {
-        spreadsheetId: '',
-        worksheet: '',
-        columns: [],
-        accountEmail: '',
-        oauthConnectionScope: '',
-        oauthConnectionId: ''
-      },
-      timeout: 5000,
-      retries: 0,
-      stopOnError: true
-    })
-  },
-  actionHttp: {
-    nodeType: 'actionHttp',
-    labelBase: 'HTTP request',
-    idPrefix: 'action-http',
-    expanded: true,
-    createData: () => ({
-      actionType: 'http',
-      params: {
-        method: 'GET',
-        url: '',
-        headers: [],
-        queryParams: [],
-        bodyType: 'raw',
-        body: '',
-        formBody: [],
-        authType: 'none',
-        authUsername: '',
-        authPassword: '',
-        authToken: ''
-      },
-      timeout: 5000,
-      retries: 0,
-      stopOnError: true
-    })
-  },
-  actionAsana: {
-    nodeType: 'actionAsana',
-    labelBase: 'Asana',
-    idPrefix: 'action-asana',
-    expanded: true,
-    createData: () => ({
-      actionType: 'asana',
-      params: {
-        operation: 'createTask',
-        connectionScope: '',
-        connectionId: '',
-        workspaceGid: '',
-        name: '',
-        additionalFields: []
-      },
-      timeout: 5000,
-      retries: 0,
-      stopOnError: true
-    })
-  },
-  actionNotion: {
-    nodeType: 'actionNotion',
-    labelBase: 'Notion',
-    idPrefix: 'action-notion',
-    expanded: true,
-    createData: () => ({
-      actionType: 'notion',
-      params: {
-        operation: 'create_database_row',
-        connectionScope: '',
-        connectionId: '',
-        databaseId: '',
-        pageId: '',
-        parentType: 'database',
-        parentDatabaseId: '',
-        parentPageId: '',
-        title: '',
-        properties: {},
-        filter: {
-          propertyId: '',
-          propertyType: '',
-          operator: 'equals',
-          value: ''
-        },
-        limit: ''
-      },
-      timeout: 5000,
-      retries: 0,
-      stopOnError: true
-    })
-  },
-  actionCode: {
-    nodeType: 'actionCode',
-    labelBase: 'Code step',
-    idPrefix: 'action-code',
-    expanded: true,
-    createData: () => ({
-      actionType: 'code',
-      params: {
-        code: '',
-        inputs: [],
-        outputs: []
-      },
-      timeout: 5000,
-      retries: 0,
-      stopOnError: true
-    })
-  }
-} as const
-
-function normalizeActionDropSubtype(
-  rawSubtype?: string | null
-): ActionDropSubtype {
-  if (!rawSubtype) return 'actionEmailSendgrid'
-  const lowered = rawSubtype.trim().toLowerCase()
-  switch (lowered) {
-    case 'actionemailsendgrid':
-    case 'actionemail':
-    case 'send email':
-    case 'email':
-    case 'sendgrid':
-      return 'actionEmailSendgrid'
-    case 'actionemailmailgun':
-    case 'mailgun':
-      return 'actionEmailMailgun'
-    case 'actionemailamazonses':
-    case 'amazon ses':
-    case 'amazon_ses':
-    case 'amazonses':
-      return 'actionEmailAmazonSes'
-    case 'actionslack':
-    case 'slack':
-      return 'actionSlack'
-    case 'actionteams':
-    case 'teams':
-      return 'actionTeams'
-    case 'actiongooglechat':
-    case 'googlechat':
-    case 'google chat':
-      return 'actionGoogleChat'
-    case 'actionasana':
-    case 'asana':
-      return 'actionAsana'
-    case 'actionnotion':
-    case 'notion':
-      return 'actionNotion'
-    case 'actionsheets':
-    case 'sheets':
-    case 'create google sheet row':
-      return 'actionSheets'
-    case 'actionhttp':
-    case 'http':
-    case 'http request':
-      return 'actionHttp'
-    case 'actioncode':
-    case 'code':
-    case 'run custom code':
-      return 'actionCode'
-    case 'messaging':
-      return 'actionSlack'
-    default:
-      return 'actionEmailSendgrid'
-  }
 }
 
 function normalizeLogicDropSubtype(
@@ -546,86 +180,8 @@ function normalizeLogicDropSubtype(
   }
 }
 
-function normalizeDropType(rawType: string): DropDescriptor {
-  const [categoryRaw, subtypeRaw] = rawType.split(':')
-  const category = categoryRaw?.trim().toLowerCase()
-
-  if (category === 'trigger') {
-    return {
-      nodeType: 'trigger',
-      labelBase: 'Trigger',
-      idPrefix: 'trigger',
-      expanded: false,
-      data: {} as ActionNodeData
-    }
-  }
-
-  if (category === 'condition') {
-    return {
-      nodeType: 'condition',
-      labelBase: 'Condition',
-      idPrefix: 'condition',
-      expanded: false,
-      data: {} as ActionNodeData
-    }
-  }
-
-  if (category === 'logic') {
-    const logicSubtype = normalizeLogicDropSubtype(subtypeRaw ?? null)
-    if (logicSubtype === 'formatter') {
-      return {
-        nodeType: 'formatter',
-        labelBase: 'Formatter',
-        idPrefix: 'logic-formatter',
-        expanded: false,
-        data: {
-          config: createEmptyFormatterConfig(),
-          hasValidationErrors: true
-        } as FormatterNodeData
-      }
-    }
-    return {
-      nodeType: 'delay',
-      labelBase: 'Delay',
-      idPrefix: 'logic-delay',
-      expanded: false,
-      data: {
-        config: {
-          mode: 'duration',
-          wait_for: {
-            minutes: undefined,
-            hours: undefined,
-            days: undefined
-          },
-          wait_until: undefined,
-          jitter_seconds: undefined
-        },
-        hasValidationErrors: true
-      } as DelayNodeData
-    }
-  }
-
-  if (category === 'action') {
-    const subtype = normalizeActionDropSubtype(subtypeRaw ?? null)
-    const config = ACTION_NODE_DROP_CONFIG[subtype]
-    return {
-      nodeType: config.nodeType,
-      labelBase: config.labelBase,
-      idPrefix: config.idPrefix,
-      expanded: config.expanded,
-      data: config.createData()
-    }
-  }
-
-  const fallback = ACTION_NODE_DROP_CONFIG.actionEmailSendgrid
-  return {
-    nodeType: fallback.nodeType,
-    labelBase: fallback.labelBase,
-    idPrefix: fallback.idPrefix,
-    expanded: fallback.expanded,
-    data: fallback.createData()
-  }
-}
+const normalizeActionKey = (value?: string | null) =>
+  typeof value === 'string' ? value.trim().toLowerCase() : ''
 
 interface FlowCanvasProps {
   isDark?: boolean
@@ -743,6 +299,34 @@ export default function FlowCanvas({
     failedIdsRef.current = failedIds
   }, [failedIds])
 
+  const actionDefinitions = useActionRegistry((state) => state.actions)
+  const actionDefinitionsById = useMemo(() => {
+    const entries = new Map<string, ActionDefinition>()
+    actionDefinitions.forEach((action) => {
+      entries.set(normalizeActionKey(action.id), action)
+    })
+    return entries
+  }, [actionDefinitions])
+  const actionDefinitionsByNodeType = useMemo(() => {
+    const entries = new Map<string, ActionDefinition>()
+    actionDefinitions.forEach((action) => {
+      if (action.nodeType && action.nodeType !== 'action') {
+        entries.set(action.nodeType, action)
+      }
+    })
+    return entries
+  }, [actionDefinitions])
+  // Enforces invariant: Fallback action resolution is deterministic, not array-order dependent
+  const fallbackActionDefinition = useMemo(() => {
+    const explicit = actionDefinitions.find(
+      (action) =>
+        normalizeActionKey(action.id) === normalizeActionKey(DEFAULT_ACTION_ID)
+    )
+    if (explicit) return explicit
+
+    return actionDefinitions.find((a) => a.nodeType === 'action') ?? null
+  }, [actionDefinitions])
+
   const flyoutNode = useWorkflowStore(
     useCallback(
       (state) =>
@@ -761,7 +345,7 @@ export default function FlowCanvas({
   }, [flyoutNodeId, flyoutNode, syncSelectionToStore])
 
   const determineActionSubtype = useCallback(
-    (data: ActionNodeData | null | undefined): ActionDropSubtype => {
+    (data: ActionNodeData | null | undefined): string => {
       const rawActionType =
         typeof data?.actionType === 'string' ? data.actionType : null
       const normalizedActionType = (() => {
@@ -863,13 +447,35 @@ export default function FlowCanvas({
     []
   )
 
-  const actionRenderers = useMemo<
-    Record<
-      ActionDropSubtype,
-      (props: ActionNodeRendererProps) => React.ReactNode
-    >
-  >(() => {
-    const createSharedRunProps = (): Pick<
+  const resolveActionDefinition = useCallback(
+    (nodeType: string | undefined, data: ActionNodeData | null | undefined) => {
+      if (nodeType) {
+        const byNodeType = actionDefinitionsByNodeType.get(nodeType)
+        if (byNodeType) return byNodeType
+      }
+      const actionType =
+        typeof data?.actionType === 'string' ? data.actionType : ''
+      if (actionType) {
+        const direct = actionDefinitionsById.get(normalizeActionKey(actionType))
+        if (direct) return direct
+      }
+      const inferredSubtype = determineActionSubtype(data)
+      const inferred = actionDefinitionsById.get(
+        normalizeActionKey(inferredSubtype)
+      )
+      return inferred ?? fallbackActionDefinition
+    },
+    [
+      actionDefinitionsById,
+      actionDefinitionsByNodeType,
+      determineActionSubtype,
+      fallbackActionDefinition
+    ]
+  )
+
+  // Unified action rendering keeps manifest and coded nodes on the same path.
+  const buildSharedRunProps = useCallback(
+    (): Pick<
       ActionNodeRendererProps,
       'onRun' | 'canEdit' | 'runAvailability'
     > => ({
@@ -879,140 +485,44 @@ export default function FlowCanvas({
       },
       canEdit: canEditRef.current,
       runAvailability: runAvailabilityRef.current
-    })
+    }),
+    []
+  )
 
-    return {
-      actionEmailSendgrid: (props: ActionNodeRendererProps) => (
-        <SendGridActionNode
-          key={`action-email-sendgrid-${props.id}-${props?.data?.wfEpoch ?? ''}`}
-          {...props}
-          {...createSharedRunProps()}
-          isRunning={runningIdsRef.current.has(props.id)}
-          isSucceeded={succeededIdsRef.current.has(props.id)}
-          isFailed={failedIdsRef.current.has(props.id)}
-        />
-      ),
-      actionEmailMailgun: (props: ActionNodeRendererProps) => (
-        <MailgunActionNode
-          key={`action-email-mailgun-${props.id}-${props?.data?.wfEpoch ?? ''}`}
-          {...props}
-          {...createSharedRunProps()}
-          isRunning={runningIdsRef.current.has(props.id)}
-          isSucceeded={succeededIdsRef.current.has(props.id)}
-          isFailed={failedIdsRef.current.has(props.id)}
-        />
-      ),
-      actionEmailAmazonSes: (props: ActionNodeRendererProps) => (
-        <AmazonSesActionNode
-          key={`action-email-amazon-ses-${props.id}-${props?.data?.wfEpoch ?? ''}`}
-          {...props}
-          {...createSharedRunProps()}
-          isRunning={runningIdsRef.current.has(props.id)}
-          isSucceeded={succeededIdsRef.current.has(props.id)}
-          isFailed={failedIdsRef.current.has(props.id)}
-        />
-      ),
-      actionSlack: (props: ActionNodeRendererProps) => (
-        <SlackActionNode
-          key={`action-slack-${props.id}-${props?.data?.wfEpoch ?? ''}`}
-          {...props}
-          {...createSharedRunProps()}
-          planTier={normalizedPlanTierRef.current}
-          onRestrictionNotice={onRestrictionNoticeRef.current}
-          isRunning={runningIdsRef.current.has(props.id)}
-          isSucceeded={succeededIdsRef.current.has(props.id)}
-          isFailed={failedIdsRef.current.has(props.id)}
-        />
-      ),
-      actionTeams: (props: ActionNodeRendererProps) => (
-        <TeamsActionNode
-          key={`action-teams-${props.id}-${props?.data?.wfEpoch ?? ''}`}
-          {...props}
-          {...createSharedRunProps()}
-          planTier={normalizedPlanTierRef.current}
-          onRestrictionNotice={onRestrictionNoticeRef.current}
-          isRunning={runningIdsRef.current.has(props.id)}
-          isSucceeded={succeededIdsRef.current.has(props.id)}
-          isFailed={failedIdsRef.current.has(props.id)}
-        />
-      ),
-      actionGoogleChat: (props: ActionNodeRendererProps) => (
-        <GoogleChatActionNode
-          key={`action-google-chat-${props.id}-${props?.data?.wfEpoch ?? ''}`}
-          {...props}
-          {...createSharedRunProps()}
-          planTier={normalizedPlanTierRef.current}
-          onRestrictionNotice={onRestrictionNoticeRef.current}
-          isRunning={runningIdsRef.current.has(props.id)}
-          isSucceeded={succeededIdsRef.current.has(props.id)}
-          isFailed={failedIdsRef.current.has(props.id)}
-        />
-      ),
-      actionSheets: (props: ActionNodeRendererProps) => (
-        <GoogleSheetsActionNode
-          key={`action-sheets-${props.id}-${props?.data?.wfEpoch ?? ''}`}
-          {...props}
-          {...createSharedRunProps()}
-          planTier={normalizedPlanTierRef.current}
-          onRestrictionNotice={onRestrictionNoticeRef.current}
-          isRunning={runningIdsRef.current.has(props.id)}
-          isSucceeded={succeededIdsRef.current.has(props.id)}
-          isFailed={failedIdsRef.current.has(props.id)}
-        />
-      ),
-      actionHttp: (props: ActionNodeRendererProps) => (
-        <HttpRequestActionNode
-          key={`action-http-${props.id}-${props?.data?.wfEpoch ?? ''}`}
-          {...props}
-          {...createSharedRunProps()}
-          isRunning={runningIdsRef.current.has(props.id)}
-          isSucceeded={succeededIdsRef.current.has(props.id)}
-          isFailed={failedIdsRef.current.has(props.id)}
-        />
-      ),
-      actionAsana: (props: ActionNodeRendererProps) => (
-        <AsanaActionNode
-          key={`action-asana-${props.id}-${props?.data?.wfEpoch ?? ''}`}
-          {...props}
-          {...createSharedRunProps()}
-          planTier={normalizedPlanTierRef.current}
-          isRunning={runningIdsRef.current.has(props.id)}
-          isSucceeded={succeededIdsRef.current.has(props.id)}
-          isFailed={failedIdsRef.current.has(props.id)}
-        />
-      ),
-      actionNotion: (props: ActionNodeRendererProps) => (
-        <NotionActionNode
-          key={`action-notion-${props.id}-${props?.data?.wfEpoch ?? ''}`}
-          {...props}
-          {...createSharedRunProps()}
-          planTier={normalizedPlanTierRef.current}
-          onRestrictionNotice={onRestrictionNoticeRef.current}
-          isRunning={runningIdsRef.current.has(props.id)}
-          isSucceeded={succeededIdsRef.current.has(props.id)}
-          isFailed={failedIdsRef.current.has(props.id)}
-        />
-      ),
-      actionCode: (props: ActionNodeRendererProps) => (
-        <RunCustomCodeActionNode
-          key={`action-code-${props.id}-${props?.data?.wfEpoch ?? ''}`}
-          {...props}
-          {...createSharedRunProps()}
-          isRunning={runningIdsRef.current.has(props.id)}
-          isSucceeded={succeededIdsRef.current.has(props.id)}
-          isFailed={failedIdsRef.current.has(props.id)}
-        />
-      )
-    }
-  }, [])
+  const buildActionNodeProps = useCallback(
+    (props: ActionNodeRendererProps): ActionNodeRendererProps => ({
+      ...props,
+      ...buildSharedRunProps(),
+      planTier: normalizedPlanTierRef.current,
+      onRestrictionNotice: onRestrictionNoticeRef.current,
+      isRunning: runningIdsRef.current.has(props.id),
+      isSucceeded: succeededIdsRef.current.has(props.id),
+      isFailed: failedIdsRef.current.has(props.id)
+    }),
+    [buildSharedRunProps]
+  )
 
   const renderActionNode = useCallback(
-    (subtype: keyof typeof actionRenderers, props: ActionNodeRendererProps) => {
-      const renderer =
-        actionRenderers[subtype] ?? actionRenderers.actionEmailSendgrid
-      return renderer(props)
+    (props: ActionNodeRendererProps) => {
+      const nodeProps = buildActionNodeProps(props)
+      const definition = resolveActionDefinition(
+        props.type,
+        props.data as ActionNodeData
+      )
+      const keySuffix = (props?.data as { wfEpoch?: unknown } | undefined)
+        ?.wfEpoch
+      const NodeComponent = (definition?.nodeComponent ??
+        GenericActionNode) as ComponentType<any>
+      const fallbackLabel = definition?.label ?? 'Action'
+      return (
+        <NodeComponent
+          key={`action-${definition?.id ?? 'generic'}-${props.id}-${keySuffix ?? ''}`}
+          {...nodeProps}
+          fallbackLabel={fallbackLabel}
+        />
+      )
     },
-    [actionRenderers]
+    [buildActionNodeProps, resolveActionDefinition]
   )
 
   const nodeTypes = useMemo(
@@ -1064,37 +574,24 @@ export default function FlowCanvas({
         />
       ),
       actionEmailSendgrid: (props: ActionNodeRendererProps) =>
-        renderActionNode('actionEmailSendgrid', props),
+        renderActionNode(props),
       actionEmailMailgun: (props: ActionNodeRendererProps) =>
-        renderActionNode('actionEmailMailgun', props),
+        renderActionNode(props),
       actionEmailAmazonSes: (props: ActionNodeRendererProps) =>
-        renderActionNode('actionEmailAmazonSes', props),
-      actionEmail: (props: ActionNodeRendererProps) => {
-        const subtype = determineActionSubtype(props?.data)
-        return renderActionNode(subtype as keyof typeof actionRenderers, props)
-      },
-      actionSlack: (props: ActionNodeRendererProps) =>
-        renderActionNode('actionSlack', props),
-      actionTeams: (props: ActionNodeRendererProps) =>
-        renderActionNode('actionTeams', props),
+        renderActionNode(props),
+      actionEmail: (props: ActionNodeRendererProps) => renderActionNode(props),
+      actionSlack: (props: ActionNodeRendererProps) => renderActionNode(props),
+      actionTeams: (props: ActionNodeRendererProps) => renderActionNode(props),
       actionGoogleChat: (props: ActionNodeRendererProps) =>
-        renderActionNode('actionGoogleChat', props),
-      actionSheets: (props: ActionNodeRendererProps) =>
-        renderActionNode('actionSheets', props),
-      actionHttp: (props: ActionNodeRendererProps) =>
-        renderActionNode('actionHttp', props),
-      actionAsana: (props: ActionNodeRendererProps) =>
-        renderActionNode('actionAsana', props),
-      actionNotion: (props: ActionNodeRendererProps) =>
-        renderActionNode('actionNotion', props),
-      actionCode: (props: ActionNodeRendererProps) =>
-        renderActionNode('actionCode', props),
-      action: (props: ActionNodeRendererProps) => {
-        const subtype = determineActionSubtype(props?.data)
-        return renderActionNode(subtype as keyof typeof actionRenderers, props)
-      }
+        renderActionNode(props),
+      actionSheets: (props: ActionNodeRendererProps) => renderActionNode(props),
+      actionHttp: (props: ActionNodeRendererProps) => renderActionNode(props),
+      actionAsana: (props: ActionNodeRendererProps) => renderActionNode(props),
+      actionNotion: (props: ActionNodeRendererProps) => renderActionNode(props),
+      actionCode: (props: ActionNodeRendererProps) => renderActionNode(props),
+      action: (props: ActionNodeRendererProps) => renderActionNode(props)
     }),
-    [determineActionSubtype, renderActionNode, runAvailability]
+    [renderActionNode, runAvailability]
   )
 
   const onNodesChange = useCallback(
@@ -1149,6 +646,109 @@ export default function FlowCanvas({
     [setEdges]
   )
 
+  const normalizeDropType = useCallback(
+    (rawType: string): DropDescriptor => {
+      const [categoryRaw, subtypeRaw] = rawType.split(':')
+      const category = categoryRaw?.trim().toLowerCase()
+
+      if (category === 'trigger') {
+        return {
+          nodeType: 'trigger',
+          labelBase: 'Trigger',
+          idPrefix: 'trigger',
+          expanded: false,
+          data: {} as ActionNodeData
+        }
+      }
+
+      if (category === 'condition') {
+        return {
+          nodeType: 'condition',
+          labelBase: 'Condition',
+          idPrefix: 'condition',
+          expanded: false,
+          data: {} as ActionNodeData
+        }
+      }
+
+      if (category === 'logic') {
+        const logicSubtype = normalizeLogicDropSubtype(subtypeRaw ?? null)
+        if (logicSubtype === 'formatter') {
+          return {
+            nodeType: 'formatter',
+            labelBase: 'Formatter',
+            idPrefix: 'logic-formatter',
+            expanded: false,
+            data: {
+              config: createEmptyFormatterConfig(),
+              hasValidationErrors: true
+            } as FormatterNodeData
+          }
+        }
+        return {
+          nodeType: 'delay',
+          labelBase: 'Delay',
+          idPrefix: 'logic-delay',
+          expanded: false,
+          data: {
+            config: {
+              mode: 'duration',
+              wait_for: {
+                minutes: undefined,
+                hours: undefined,
+                days: undefined
+              },
+              wait_until: undefined,
+              jitter_seconds: undefined
+            },
+            hasValidationErrors: true
+          } as DelayNodeData
+        }
+      }
+
+      if (category === 'action') {
+        const actionKey = normalizeActionKey(subtypeRaw ?? null)
+        const definition =
+          (actionKey ? actionDefinitionsById.get(actionKey) : null) ??
+          fallbackActionDefinition
+        if (definition) {
+          return {
+            nodeType: definition.nodeType,
+            labelBase: definition.label || 'Action',
+            idPrefix: definition.idPrefix || 'action',
+            expanded: definition.expanded,
+            data: definition.createNodeData()
+          }
+        }
+      }
+
+      if (fallbackActionDefinition) {
+        return {
+          nodeType: fallbackActionDefinition.nodeType,
+          labelBase: fallbackActionDefinition.label || 'Action',
+          idPrefix: fallbackActionDefinition.idPrefix || 'action',
+          expanded: fallbackActionDefinition.expanded,
+          data: fallbackActionDefinition.createNodeData()
+        }
+      }
+
+      return {
+        nodeType: 'action',
+        labelBase: 'Action',
+        idPrefix: 'action',
+        expanded: true,
+        data: {
+          actionType: '',
+          params: {},
+          timeout: 5000,
+          retries: 0,
+          stopOnError: true
+        } as ActionNodeData
+      }
+    },
+    [actionDefinitionsById, fallbackActionDefinition]
+  )
+
   const addNodeAtPosition = useCallback(
     (rawType: string, position: XYPosition) => {
       if (!canEditRef.current) return
@@ -1185,7 +785,7 @@ export default function FlowCanvas({
       const normalizedNodes = normalizeNodesForState([...currentNodes, newNode])
       setNodes(normalizedNodes)
     },
-    [isSoloPlan, onRestrictionNotice, setNodes]
+    [isSoloPlan, normalizeDropType, onRestrictionNotice, setNodes]
   )
 
   const getViewportCenterPosition = useCallback((): XYPosition => {
@@ -1339,29 +939,12 @@ export default function FlowCanvas({
 
   // Flyout field renderers are implemented as standalone components below.
 
-  const flyoutSubtype = useMemo<ActionDropSubtype | null>(() => {
+  const flyoutActionDefinition = useMemo<ActionDefinition | null>(() => {
     if (!flyoutNode) return null
     const t = (flyoutNode.type || '').toString()
     if (t === 'trigger' || t === 'condition' || t === 'formatter') return null
-    const known = new Set([
-      'actionEmailSendgrid',
-      'actionEmailMailgun',
-      'actionEmailAmazonSes',
-      'actionEmailSmtp',
-      'actionSlack',
-      'actionTeams',
-      'actionGoogleChat',
-      'actionSheets',
-      'actionHttp',
-      'actionCode',
-      'actionAsana',
-      'actionNotion'
-    ])
-    if (known.has(t)) {
-      return t as ActionDropSubtype
-    }
-    return determineActionSubtype(flyoutNode.data as ActionNodeData | null)
-  }, [flyoutNode, determineActionSubtype])
+    return resolveActionDefinition(t, flyoutNode.data as ActionNodeData | null)
+  }, [flyoutNode, resolveActionDefinition])
 
   const selectedNodeLabel = useMemo(() => {
     if (!flyoutNode) return null
@@ -1515,10 +1098,10 @@ export default function FlowCanvas({
                       <FlyoutDelayFields nodeId={flyoutNode.id} />
                     ) : flyoutNode.type === 'formatter' ? (
                       <FlyoutFormatterFields nodeId={flyoutNode.id} />
-                    ) : flyoutSubtype ? (
+                    ) : flyoutActionDefinition ? (
                       <FlyoutActionFields
                         nodeId={flyoutNode.id}
-                        subtype={flyoutSubtype}
+                        actionDefinition={flyoutActionDefinition}
                         normalizedPlanTier={normalizedPlanTier}
                         canEdit={canEditRef.current}
                         onRestrictionNotice={onRestrictionNoticeRef.current}
@@ -1542,7 +1125,7 @@ export default function FlowCanvas({
 
 interface FlyoutActionFieldsProps {
   nodeId: string
-  subtype: ActionDropSubtype
+  actionDefinition: ActionDefinition
   normalizedPlanTier: ReturnType<typeof normalizePlanTier>
   canEdit: boolean
   onRestrictionNotice?: (message: string) => void
@@ -1550,7 +1133,7 @@ interface FlyoutActionFieldsProps {
 
 function FlyoutActionFields({
   nodeId,
-  subtype,
+  actionDefinition,
   normalizedPlanTier,
   canEdit,
   onRestrictionNotice
@@ -1661,18 +1244,18 @@ function FlyoutActionFields({
     provider: 'slack',
     isSoloPlan: controller.isSoloPlan,
     onRestrictionNotice,
-    enabled: subtype === 'actionSlack'
+    enabled: actionDefinition.messagingProvider === 'slack'
   })
   const teamsRestriction = useMessagingActionRestriction({
     provider: 'teams',
     isSoloPlan: controller.isSoloPlan,
     onRestrictionNotice,
-    enabled: subtype === 'actionTeams'
+    enabled: actionDefinition.messagingProvider === 'teams'
   })
   const messagingRestriction =
-    subtype === 'actionSlack'
+    actionDefinition.messagingProvider === 'slack'
       ? slackRestriction
-      : subtype === 'actionTeams'
+      : actionDefinition.messagingProvider === 'teams'
         ? teamsRestriction
         : { planRestrictionMessage: null, isRestricted: false }
 
@@ -1680,85 +1263,97 @@ function FlyoutActionFields({
     messagingRestriction.planRestrictionMessage ??
     controller.planRestrictionMessage
 
+  const allInputs = useMemo(
+    () => actionDefinition.inputs ?? [],
+    [actionDefinition.inputs]
+  )
+  const managesDynamicInputs = !actionDefinition.fieldsComponent
+  const requiredInputMissing = useMemo(
+    () =>
+      managesDynamicInputs &&
+      allInputs.some((input) => {
+        if (!input.required) return false
+        const rawValue = controller.params?.[input.name]
+        const value =
+          typeof rawValue === 'string'
+            ? rawValue
+            : rawValue == null
+              ? ''
+              : String(rawValue)
+        return value.trim().length === 0
+      }),
+    [controller.params, managesDynamicInputs, allInputs]
+  )
+  const currentInputErrors = Boolean(nodeData?.hasValidationErrors)
+  useEffect(() => {
+    if (!managesDynamicInputs) return
+    if (currentInputErrors === requiredInputMissing) return
+    controller.setValidationState(requiredInputMissing)
+  }, [
+    controller,
+    currentInputErrors,
+    managesDynamicInputs,
+    requiredInputMissing
+  ])
+
+  const renderDynamicInputs = () => {
+    if (!managesDynamicInputs || allInputs.length === 0) return null
+    return (
+      <div className="space-y-3">
+        {allInputs.map((input) => {
+          const rawValue = controller.params?.[input.name]
+          const value =
+            typeof rawValue === 'string'
+              ? rawValue
+              : rawValue == null
+                ? ''
+                : String(rawValue)
+          const missing = input.required && value.trim().length === 0
+          return (
+            <div key={input.name} className="space-y-1">
+              <label className="block text-[10px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                {input.label}
+                {input.required ? ' *' : ''}
+              </label>
+              <NodeInputField
+                value={value}
+                onChange={(nextValue) =>
+                  controller.updateParams(
+                    { [input.name]: nextValue },
+                    { markDirty: true }
+                  )
+                }
+                disabled={!controller.effectiveCanEdit}
+              />
+              {missing ? (
+                <p className="text-xs text-red-500">Required</p>
+              ) : null}
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
   const renderFields = () => {
-    switch (subtype) {
-      case 'actionEmailSendgrid':
-        return (
-          <SendGridAction
-            nodeId={nodeId}
-            canEdit={controller.effectiveCanEdit}
-          />
-        )
-      case 'actionEmailMailgun':
-        return (
-          <MailGunAction
-            nodeId={nodeId}
-            canEdit={controller.effectiveCanEdit}
-          />
-        )
-      case 'actionEmailAmazonSes':
-        return (
-          <AmazonSESAction
-            nodeId={nodeId}
-            canEdit={controller.effectiveCanEdit}
-          />
-        )
-      case 'actionSlack':
-        return (
-          <SlackAction
-            nodeId={nodeId}
-            canEdit={controller.effectiveCanEdit}
-            isRestricted={messagingRestriction.isRestricted}
-          />
-        )
-      case 'actionTeams':
-        return (
-          <TeamsAction
-            nodeId={nodeId}
-            canEdit={controller.effectiveCanEdit}
-            isRestricted={messagingRestriction.isRestricted}
-          />
-        )
-      case 'actionGoogleChat':
-        return (
-          <GoogleChatAction
-            nodeId={nodeId}
-            canEdit={controller.effectiveCanEdit}
-          />
-        )
-      case 'actionSheets':
-        return controller.planRestrictionMessage ? null : (
-          <SheetsAction nodeId={nodeId} canEdit={controller.effectiveCanEdit} />
-        )
-      case 'actionHttp':
-        return (
-          <HttpRequestAction
-            nodeId={nodeId}
-            canEdit={controller.effectiveCanEdit}
-          />
-        )
-      case 'actionAsana':
-        return controller.planRestrictionMessage ? null : (
-          <AsanaAction
-            nodeId={nodeId}
-            canEdit={controller.effectiveCanEdit}
-            planTier={normalizedPlanTier}
-          />
-        )
-      case 'actionNotion':
-        return controller.planRestrictionMessage ? null : (
-          <NotionAction nodeId={nodeId} canEdit={controller.effectiveCanEdit} />
-        )
-      case 'actionCode':
-        return (
-          <RunCustomCodeAction
-            nodeId={nodeId}
-            canEdit={controller.effectiveCanEdit}
-          />
-        )
-      default:
-        return null
+    if (
+      actionDefinition.hideFieldsWhenRestricted &&
+      controller.planRestrictionMessage
+    ) {
+      return null
     }
+    if (actionDefinition.fieldsComponent) {
+      const FieldsComponent = actionDefinition.fieldsComponent
+      return (
+        <FieldsComponent
+          nodeId={nodeId}
+          canEdit={controller.effectiveCanEdit}
+          planTier={normalizedPlanTier}
+          isRestricted={messagingRestriction.isRestricted}
+        />
+      )
+    }
+    return renderDynamicInputs()
   }
 
   return (

@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+  type SVGProps
+} from 'react'
 import { API_BASE_URL } from '@/lib/config'
 import { errorMessage } from '@/lib/errorMessage'
 import '@xyflow/react/dist/style.css'
@@ -6,10 +14,16 @@ import WorkflowToolbar from './Toolbar'
 import FlowCanvas from './FlowCanvas'
 import ActionIcon from '@/assets/svg-components/ActionIcon'
 import ConditionIcon from '@/assets/svg-components/ConditionIcon'
+import SlackIcon from '@/assets/svg-components/third-party/SlackIcon'
+import GoogleIcon from '@/assets/svg-components/third-party/GoogleIcon'
+import MicrosoftIcon from '@/assets/svg-components/third-party/MicrosoftIcon'
+import AsanaIcon from '@/assets/svg-components/third-party/AsanaIcon'
+import NotionIcon from '@/assets/svg-components/third-party/NotionIcon'
 import { ReactFlowProvider } from '@xyflow/react'
 import { ChevronDown, ChevronUp, Plus, Search } from 'lucide-react'
 import { selectCurrentWorkspace, useAuth } from '@/stores/auth'
 import { selectIsSaving, useWorkflowStore } from '@/stores/workflowStore'
+import { useActionRegistry } from '@/stores/actionRegistry'
 import {
   normalizeEdgeForPayload,
   sanitizeData,
@@ -56,139 +70,41 @@ const TriggerIcon = () => (
   </svg>
 )
 
-const ACTION_SIDEBAR_TILE_GROUPS = [
-  {
-    heading: 'Email',
-    tiles: [
-      {
-        id: 'action-email-sendgrid',
-        label: 'SendGrid Email',
-        description: 'Send emails with SendGrid',
-        dragType: 'action:actionEmailSendgrid',
-        gradient: 'from-indigo-500 to-violet-600',
-        icon: <ActionIcon />
-      },
-      {
-        id: 'action-email-mailgun',
-        label: 'Mailgun Email',
-        description: 'Deliver email through Mailgun',
-        dragType: 'action:actionEmailMailgun',
-        gradient: 'from-purple-500 to-fuchsia-600',
-        icon: <ActionIcon />
-      },
-      {
-        id: 'action-email-amazon-ses',
-        label: 'Amazon SES Email',
-        description: 'Send email via Amazon SES',
-        dragType: 'action:actionEmailAmazonSes',
-        gradient: 'from-amber-500 to-yellow-500',
-        icon: <ActionIcon />
-      }
-    ]
-  },
-  {
-    heading: 'Messaging',
-    tiles: [
-      {
-        id: 'action-slack',
-        label: 'Slack',
-        description: 'Message a Slack channel',
-        dragType: 'action:actionSlack',
-        gradient: 'from-purple-500 to-fuchsia-600',
-        icon: <ActionIcon />
-      },
-      {
-        id: 'action-google-chat',
-        label: 'Google Chat',
-        description: 'Send a Google Chat message',
-        dragType: 'action:actionGoogleChat',
-        gradient: 'from-amber-400 to-rose-500',
-        icon: <ActionIcon />
-      }
-    ]
-  },
-  {
-    heading: 'Project Management',
-    tiles: [
-      {
-        id: 'action-asana',
-        label: 'Asana',
-        description: 'Create and update Asana projects and tasks',
-        dragType: 'action:actionAsana',
-        gradient: 'from-orange-500 to-rose-500',
-        icon: <ActionIcon />
-      },
-      {
-        id: 'action-notion',
-        label: 'Notion',
-        description: 'Create and query Notion databases',
-        dragType: 'action:actionNotion',
-        gradient: 'from-stone-600 to-zinc-800',
-        icon: <ActionIcon />
-      }
-    ]
-  },
-  {
-    heading: 'Google Sheets',
-    tiles: [
-      {
-        id: 'action-sheets',
-        label: 'Google Sheets',
-        description: 'Append a spreadsheet row',
-        dragType: 'action:actionSheets',
-        gradient: 'from-emerald-500 to-lime-500',
-        icon: <ActionIcon />
-      }
-    ]
-  },
-  {
-    heading: 'Webhooks & APIs',
-    tiles: [
-      {
-        id: 'action-http',
-        label: 'HTTP Request',
-        description: 'Call an external API',
-        dragType: 'action:actionHttp',
-        gradient: 'from-amber-500 to-orange-600',
-        icon: <ActionIcon />
-      }
-    ]
-  },
-  {
-    heading: 'Custom Logic',
-    tiles: [
-      {
-        id: 'action-code',
-        label: 'Run Code',
-        description: 'Execute custom logic',
-        dragType: 'action:actionCode',
-        gradient: 'from-slate-600 to-slate-800',
-        icon: <ActionIcon />
-      }
-    ]
-  },
-  {
-    heading: 'Logic / Utility',
-    tiles: [
-      {
-        id: 'logic-delay',
-        label: 'Delay',
-        description: 'Pause execution for a set time',
-        dragType: 'logic:delay',
-        gradient: 'from-sky-500 to-cyan-600',
-        icon: <ConditionIcon />
-      },
-      {
-        id: 'logic-formatter',
-        label: 'Formatter',
-        description: 'Transform or reshape data',
-        dragType: 'logic:formatter',
-        gradient: 'from-teal-500 to-emerald-600',
-        icon: <ConditionIcon />
-      }
-    ]
-  }
-] as const
+const ICON_BY_KEY: Partial<
+  Record<string, ComponentType<SVGProps<SVGSVGElement>>>
+> = {
+  action: ActionIcon,
+  slack: SlackIcon,
+  google: GoogleIcon,
+  microsoft: MicrosoftIcon,
+  asana: AsanaIcon,
+  notion: NotionIcon
+}
+
+const normalizeIconKey = (value?: string | null) =>
+  typeof value === 'string' ? value.trim().toLowerCase() : ''
+
+const LOGIC_SIDEBAR_TILE_GROUP = {
+  heading: 'Logic / Utility',
+  tiles: [
+    {
+      id: 'logic-delay',
+      label: 'Delay',
+      description: 'Pause execution for a set time',
+      dragType: 'logic:delay',
+      gradient: 'from-sky-500 to-cyan-600',
+      icon: <ConditionIcon />
+    },
+    {
+      id: 'logic-formatter',
+      label: 'Formatter',
+      description: 'Transform or reshape data',
+      dragType: 'logic:formatter',
+      gradient: 'from-teal-500 to-emerald-600',
+      icon: <ConditionIcon />
+    }
+  ]
+} as const
 
 export default function Dashboard() {
   const [workflows, setWorkflows] = useState<WorkflowRecord[]>([])
@@ -1447,26 +1363,89 @@ export default function Dashboard() {
   const handlePaletteQuickAdd = useCallback((dragType: string) => {
     paletteQuickAddRef.current?.(dragType)
   }, [])
+  const actionDefinitions = useActionRegistry((state) => state.actions)
+  const loadActionCatalog = useActionRegistry((state) => state.loadCatalog)
+
+  useEffect(() => {
+    void loadActionCatalog()
+  }, [loadActionCatalog])
+
+  const actionGroups = useMemo(() => {
+    const groups = new Map<
+      string,
+      {
+        heading: string
+        tiles: Array<{
+          id: string
+          label: string
+          description: string
+          dragType: string
+          gradient: string
+          icon: React.ReactNode
+        }>
+      }
+    >()
+
+    actionDefinitions.forEach((action) => {
+      if (action.visibleInPicker === false) return
+      const heading = action.category?.trim() || 'Actions'
+      const iconKey = normalizeIconKey(action.iconKey)
+      const IconComponent = ICON_BY_KEY[iconKey] ?? ActionIcon
+      const label = action.label?.trim() || action.id
+      const description = action.description || ''
+      const tile = {
+        id: action.id,
+        label,
+        description,
+        dragType: `action:${action.id}`,
+        gradient: action.gradient,
+        icon: <IconComponent />
+      }
+      const existing = groups.get(heading)
+      if (existing) {
+        existing.tiles.push(tile)
+      } else {
+        groups.set(heading, { heading, tiles: [tile] })
+      }
+    })
+
+    return [...groups.values(), LOGIC_SIDEBAR_TILE_GROUP]
+  }, [actionDefinitions])
 
   // Collapsible state for action categories; initialized expanded
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(ACTION_SIDEBAR_TILE_GROUPS.map((g) => [g.heading, true]))
+    Object.fromEntries(actionGroups.map((g) => [g.heading, true]))
   )
+  useEffect(() => {
+    setOpenGroups((prev) => {
+      let changed = false
+      const next = { ...prev }
+      actionGroups.forEach((group) => {
+        if (!(group.heading in next)) {
+          next[group.heading] = true
+          changed = true
+        }
+      })
+      return changed ? next : prev
+    })
+  }, [actionGroups])
 
   // Search state for actions
   const [actionSearch, setActionSearch] = useState('')
   const trimmedQuery = actionSearch.trim().toLowerCase()
   const filteredGroups = useMemo(() => {
-    if (!trimmedQuery) return ACTION_SIDEBAR_TILE_GROUPS
-    return ACTION_SIDEBAR_TILE_GROUPS.map((group) => ({
-      heading: group.heading,
-      tiles: group.tiles.filter((tile) => {
-        const label = tile.label.toLowerCase()
-        const desc = (tile.description || '').toLowerCase()
-        return label.includes(trimmedQuery) || desc.includes(trimmedQuery)
-      })
-    })).filter((g) => g.tiles.length > 0)
-  }, [trimmedQuery])
+    if (!trimmedQuery) return actionGroups
+    return actionGroups
+      .map((group) => ({
+        heading: group.heading,
+        tiles: group.tiles.filter((tile) => {
+          const label = tile.label.toLowerCase()
+          const desc = (tile.description || '').toLowerCase()
+          return label.includes(trimmedQuery) || desc.includes(trimmedQuery)
+        })
+      }))
+      .filter((g) => g.tiles.length > 0)
+  }, [actionGroups, trimmedQuery])
 
   function QuickAddButton({
     label,
