@@ -939,6 +939,11 @@ mod tests {
                     client_secret: "stub".into(),
                     redirect_uri: "http://localhost".into(),
                 },
+                bitly: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
+                },
                 token_encryption_key: vec![0u8; 32],
             },
             api_secrets_encryption_key: vec![1u8; 32],
@@ -1141,6 +1146,11 @@ mod tests {
                 redirect_uri: "http://localhost".into(),
             },
             notion: OAuthProviderConfig {
+                client_id: "stub".into(),
+                client_secret: "stub".into(),
+                redirect_uri: "http://localhost".into(),
+            },
+            bitly: OAuthProviderConfig {
                 client_id: "stub".into(),
                 client_secret: "stub".into(),
                 redirect_uri: "http://localhost".into(),

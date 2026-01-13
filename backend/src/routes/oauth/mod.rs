@@ -11,9 +11,10 @@ pub use accounts::{
     refresh_connection, revoke_connection,
 };
 pub use connect::{
-    asana_connect_callback, asana_connect_start, google_connect_callback, google_connect_start,
-    microsoft_connect_callback, microsoft_connect_start, notion_connect_callback,
-    notion_connect_start, slack_connect_callback, slack_connect_start,
+    asana_connect_callback, asana_connect_start, bitly_connect_callback, bitly_connect_start,
+    google_connect_callback, google_connect_start, microsoft_connect_callback,
+    microsoft_connect_start, notion_connect_callback, notion_connect_start, slack_connect_callback,
+    slack_connect_start,
 };
 #[allow(unused_imports)]
 pub(crate) use helpers::assert_oauth_provider_mappings;

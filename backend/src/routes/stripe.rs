@@ -1395,6 +1395,11 @@ mod tests {
                     client_secret: "secret".into(),
                     redirect_uri: "https://app.example.com/oauth/asana".into(),
                 },
+                bitly: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
+                },
                 token_encryption_key: vec![0; 32],
             },
             api_secrets_encryption_key: vec![1; 32],

@@ -94,6 +94,25 @@ pub fn build_integration_registry() -> Result<IntegrationRegistry, IntegrationRe
             },
             oauth_metadata: Some(OAuthMetadata { scopes: Vec::new() }),
         },
+        IntegrationManifest {
+            integration_id: "bitly".to_string(),
+            auth_type: IntegrationAuthType::OAuth2,
+            token_scope: TokenScope::Personal,
+            ownership_model: OwnershipModel::PersonalOnly,
+            provider_constraints: ProviderConstraints {
+                workspace_first: false,
+                single_install_per_workspace: false,
+            },
+            ui_metadata: UiMetadata {
+                display_name: "Bitly".to_string(),
+                description: "Shorten and manage links with Bitly.".to_string(),
+                icon_key: Some("bitly".to_string()),
+                docs_url: None,
+            },
+            oauth_metadata: Some(OAuthMetadata {
+                scopes: vec!["bitly".to_string()],
+            }),
+        },
     ];
 
     IntegrationRegistry::new(manifests)

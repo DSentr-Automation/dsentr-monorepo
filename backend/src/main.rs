@@ -65,10 +65,11 @@ use routes::{
     microsoft::{list_channel_members, list_team_channels, list_teams},
     oauth::{
         asana_connect_callback, asana_connect_start, assert_oauth_provider_mappings,
-        disconnect_connection, get_connection_by_id, google_connect_callback, google_connect_start,
-        list_connections, list_provider_connections, microsoft_connect_callback,
-        microsoft_connect_start, notion_connect_callback, notion_connect_start, refresh_connection,
-        revoke_connection, slack_connect_callback, slack_connect_start,
+        bitly_connect_callback, bitly_connect_start, disconnect_connection, get_connection_by_id,
+        google_connect_callback, google_connect_start, list_connections, list_provider_connections,
+        microsoft_connect_callback, microsoft_connect_start, notion_connect_callback,
+        notion_connect_start, refresh_connection, revoke_connection, slack_connect_callback,
+        slack_connect_start,
     },
     options::{
         secrets::{delete_secret, list_secrets, upsert_secret},
@@ -668,6 +669,8 @@ async fn main() -> Result<()> {
         .route("/asana/callback", get(asana_connect_callback))
         .route("/notion/start", get(notion_connect_start))
         .route("/notion/callback", get(notion_connect_callback))
+        .route("/bitly", get(bitly_connect_start))
+        .route("/bitly/callback", get(bitly_connect_callback))
         .layer(session_guard.clone());
 
     let oauth_private_routes = Router::new()

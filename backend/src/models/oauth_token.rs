@@ -11,6 +11,7 @@ pub enum ConnectedOAuthProvider {
     Slack,
     Asana,
     Notion,
+    Bitly,
 }
 
 #[allow(dead_code)]

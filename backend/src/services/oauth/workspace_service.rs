@@ -806,6 +806,7 @@ impl WorkspaceOAuthService {
             ConnectedOAuthProvider::Slack => 2,
             ConnectedOAuthProvider::Asana => 3,
             ConnectedOAuthProvider::Notion => 4,
+            ConnectedOAuthProvider::Bitly => 5,
         }
     }
 

@@ -143,6 +143,8 @@ pub enum OAuthAccountError {
     EmailNotVerified { provider: ConnectedOAuthProvider },
     #[error("oauth token revoked for {provider:?}")]
     TokenRevoked { provider: ConnectedOAuthProvider },
+    #[error("token refresh not supported for {provider:?}")]
+    RefreshNotSupported { provider: ConnectedOAuthProvider },
 }
 
 #[derive(Clone)]
@@ -156,6 +158,7 @@ pub struct OAuthAccountService {
     slack: OAuthProviderConfig,
     asana: OAuthProviderConfig,
     notion: OAuthProviderConfig,
+    bitly: OAuthProviderConfig,
     #[cfg(test)]
     refresh_override: Option<Arc<RefreshOverride>>,
     #[cfg(test)]
@@ -182,6 +185,7 @@ impl OAuthAccountService {
             slack: settings.slack.clone(),
             asana: settings.asana.clone(),
             notion: settings.notion.clone(),
+            bitly: settings.bitly.clone(),
             #[cfg(test)]
             refresh_override: None,
             #[cfg(test)]
@@ -349,6 +353,10 @@ impl OAuthAccountService {
         // `default` grants standard Asana app permissions; `email` ensures the user profile
         // includes an email address for auditing and display in the UI.
         "default email"
+    }
+
+    pub fn bitly_scopes(&self) -> &'static str {
+        "bitly.read bitly.write"
     }
 
     pub async fn save_authorization(
@@ -1020,6 +1028,7 @@ impl OAuthAccountService {
             }
             ConnectedOAuthProvider::Asana => self.exchange_asana_code(code).await,
             ConnectedOAuthProvider::Notion => self.exchange_notion_code(code).await,
+            ConnectedOAuthProvider::Bitly => self.exchange_bitly_code(code).await,
         }
     }
 
@@ -1608,6 +1617,66 @@ impl OAuthAccountService {
         })
     }
 
+    async fn exchange_bitly_code(
+        &self,
+        code: &str,
+    ) -> Result<AuthorizationTokens, OAuthAccountError> {
+        #[derive(Deserialize)]
+        struct BitlyTokenResponse {
+            access_token: String,
+            #[serde(default)]
+            login: Option<String>,
+            #[serde(default)]
+            guid: Option<String>,
+        }
+
+        let response: BitlyTokenResponse = self
+            .client
+            .post("https://api-ssl.bitly.com/oauth/access_token")
+            .form(&[
+                ("client_id", self.bitly.client_id.as_str()),
+                ("client_secret", self.bitly.client_secret.as_str()),
+                ("code", code),
+                ("redirect_uri", self.bitly.redirect_uri.as_str()),
+            ])
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
+        let normalize = |value: Option<String>| {
+            value
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(|v| v.to_string())
+        };
+
+        let account_label =
+            normalize(response.login).unwrap_or_else(|| "Bitly Account".to_string());
+
+        let provider_user_id = response
+            .guid
+            .as_deref()
+            .and_then(normalize_provider_user_id);
+
+        // Bitly tokens do not expire.
+        let expires_at = OffsetDateTime::now_utc()
+            .replace_year(2124)
+            .expect("valid far-future timestamp");
+
+        Ok(AuthorizationTokens {
+            access_token: response.access_token,
+            refresh_token: String::new(),
+            expires_at,
+            account_email: account_label,
+            provider_user_id,
+            slack: None,
+            notion: None,
+        })
+    }
+
     pub async fn refresh_access_token(
         &self,
         provider: ConnectedOAuthProvider,
@@ -1623,6 +1692,9 @@ impl OAuthAccountService {
             ConnectedOAuthProvider::Slack => self.refresh_slack_token(refresh_token).await,
             ConnectedOAuthProvider::Asana => self.refresh_asana_token(refresh_token).await,
             ConnectedOAuthProvider::Notion => self.refresh_notion_token(refresh_token).await,
+            ConnectedOAuthProvider::Bitly => Err(OAuthAccountError::RefreshNotSupported {
+                provider: ConnectedOAuthProvider::Bitly,
+            }),
         }
     }
 
@@ -2125,6 +2197,7 @@ impl OAuthAccountService {
                 }
             }
             ConnectedOAuthProvider::Notion => Ok(()),
+            ConnectedOAuthProvider::Bitly => Ok(()),
         }
     }
 
@@ -2523,6 +2596,11 @@ impl OAuthAccountService {
                 redirect_uri: "http://localhost".into(),
             },
             notion: OAuthProviderConfig {
+                client_id: "stub".into(),
+                client_secret: "stub".into(),
+                redirect_uri: "http://localhost".into(),
+            },
+            bitly: OAuthProviderConfig {
                 client_id: "stub".into(),
                 client_secret: "stub".into(),
                 redirect_uri: "http://localhost".into(),
@@ -3058,6 +3136,11 @@ mod tests {
                 client_secret: "secret".into(),
                 redirect_uri: "http://localhost".into(),
             },
+            bitly: OAuthProviderConfig {
+                client_id: "stub".into(),
+                client_secret: "stub".into(),
+                redirect_uri: "http://localhost".into(),
+            },
             token_encryption_key: vec![0u8; 32],
         };
         let service = OAuthAccountService::new(repo, workspace_repo, key, client, &settings);
@@ -3128,6 +3211,11 @@ mod tests {
                 client_id: "client".into(),
                 client_secret: "secret".into(),
                 redirect_uri: "http://localhost/asana".into(),
+            },
+            bitly: OAuthProviderConfig {
+                client_id: "stub".into(),
+                client_secret: "stub".into(),
+                redirect_uri: "http://localhost".into(),
             },
             token_encryption_key: vec![0u8; 32],
         };
@@ -3203,6 +3291,11 @@ mod tests {
                 client_id: "client".into(),
                 client_secret: "secret".into(),
                 redirect_uri: "http://localhost/asana".into(),
+            },
+            bitly: OAuthProviderConfig {
+                client_id: "stub".into(),
+                client_secret: "stub".into(),
+                redirect_uri: "http://localhost".into(),
             },
             token_encryption_key: vec![0u8; 32],
         };
@@ -3936,6 +4029,11 @@ mod tests {
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/asana".into(),
                 },
+                bitly: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
+                },
                 token_encryption_key: (*key).clone(),
             },
         );
@@ -4026,6 +4124,11 @@ mod tests {
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/asana".into(),
                 },
+                bitly: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
+                },
                 token_encryption_key: vec![0u8; 32],
             },
         );
@@ -4091,6 +4194,11 @@ mod tests {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/asana".into(),
+                },
+                bitly: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
                 },
                 token_encryption_key: vec![0u8; 32],
             },
@@ -4170,6 +4278,11 @@ mod tests {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/asana".into(),
+                },
+                bitly: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
                 },
                 token_encryption_key: (*key).clone(),
             },
@@ -4264,6 +4377,11 @@ mod tests {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/asana".into(),
+                },
+                bitly: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
                 },
                 token_encryption_key: (*key).clone(),
             },
@@ -4399,6 +4517,11 @@ mod tests {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/asana".into(),
+                },
+                bitly: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
                 },
                 token_encryption_key: (*key).clone(),
             },
@@ -4542,6 +4665,11 @@ mod tests {
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/asana".into(),
                 },
+                bitly: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
+                },
                 token_encryption_key: (*key).clone(),
             },
         )
@@ -4617,6 +4745,11 @@ mod tests {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/asana".into(),
+                },
+                bitly: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
                 },
                 token_encryption_key: (*key).clone(),
             },
@@ -4706,6 +4839,11 @@ mod tests {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/asana".into(),
+                },
+                bitly: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
                 },
                 token_encryption_key: (*key).clone(),
             },
@@ -4807,6 +4945,11 @@ mod tests {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/asana".into(),
+                },
+                bitly: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
                 },
                 token_encryption_key: (*key).clone(),
             },
@@ -4912,6 +5055,11 @@ mod tests {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/asana".into(),
+                },
+                bitly: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
                 },
                 token_encryption_key: (*key).clone(),
             },
@@ -5078,6 +5226,11 @@ mod tests {
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/asana".into(),
                 },
+                bitly: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
+                },
                 token_encryption_key: (*key).clone(),
             },
         );
@@ -5150,6 +5303,11 @@ mod tests {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/asana".into(),
+                },
+                bitly: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
                 },
                 token_encryption_key: (*key).clone(),
             },

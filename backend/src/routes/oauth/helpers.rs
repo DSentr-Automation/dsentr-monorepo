@@ -11,11 +11,13 @@ pub(crate) const MICROSOFT_AUTH_URL: &str =
 pub(crate) const SLACK_AUTH_URL: &str = "https://slack.com/oauth/v2/authorize";
 pub(crate) const ASANA_AUTH_URL: &str = "https://app.asana.com/-/oauth_authorize";
 pub(crate) const NOTION_AUTH_URL: &str = "https://api.notion.com/v1/oauth/authorize";
+pub(crate) const BITLY_AUTH_URL: &str = "https://bitly.com/oauth/authorize";
 pub(crate) const GOOGLE_STATE_COOKIE: &str = "oauth_google_state";
 pub(crate) const MICROSOFT_STATE_COOKIE: &str = "oauth_microsoft_state";
 pub(crate) const SLACK_STATE_COOKIE: &str = "oauth_slack_state";
 pub(crate) const ASANA_STATE_COOKIE: &str = "oauth_asana_state";
 pub(crate) const NOTION_STATE_COOKIE: &str = "oauth_notion_state";
+pub(crate) const BITLY_STATE_COOKIE: &str = "oauth_bitly_state";
 pub(crate) const STATE_COOKIE_MAX_MINUTES: i64 = 10;
 pub(crate) const OAUTH_PLAN_RESTRICTION_MESSAGE: &str =
     "OAuth integrations are available on workspace plans and above. Upgrade to connect accounts.";
@@ -364,6 +366,7 @@ pub fn map_oauth_error(err: OAuthAccountError) -> Response {
                 ConnectedOAuthProvider::Slack => "Slack",
                 ConnectedOAuthProvider::Asana => "Asana",
                 ConnectedOAuthProvider::Notion => "Notion",
+                ConnectedOAuthProvider::Bitly => "Bitly",
             };
             JsonResponse::bad_request(&format!(
                 "The {provider_name} account email must be verified before connecting."
@@ -378,6 +381,11 @@ pub fn map_oauth_error(err: OAuthAccountError) -> Response {
         OAuthAccountError::MissingRefreshToken => {
             JsonResponse::server_error("Provider did not return a refresh token").into_response()
         }
+        OAuthAccountError::RefreshNotSupported { provider } => JsonResponse::bad_request(&format!(
+            "The {:?} provider does not support token refresh",
+            provider
+        ))
+        .into_response(),
     }
 }
 
@@ -400,6 +408,9 @@ pub(crate) fn error_message_for_redirect(err: &OAuthAccountError) -> String {
         }
         OAuthAccountError::MissingRefreshToken => {
             "The OAuth provider did not return a refresh token.".to_string()
+        }
+        OAuthAccountError::RefreshNotSupported { .. } => {
+            "The OAuth provider does not support token refresh.".to_string()
         }
     }
 }
@@ -494,12 +505,14 @@ pub(crate) const MICROSOFT_INTEGRATION_ID: &str = "microsoft";
 pub(crate) const SLACK_INTEGRATION_ID: &str = "slack";
 pub(crate) const ASANA_INTEGRATION_ID: &str = "asana";
 pub(crate) const NOTION_INTEGRATION_ID: &str = "notion";
+pub(crate) const BITLY_INTEGRATION_ID: &str = "bitly";
 const OAUTH_PROVIDER_MAP: &[(&str, ConnectedOAuthProvider)] = &[
     (GOOGLE_INTEGRATION_ID, ConnectedOAuthProvider::Google),
     (MICROSOFT_INTEGRATION_ID, ConnectedOAuthProvider::Microsoft),
     (SLACK_INTEGRATION_ID, ConnectedOAuthProvider::Slack),
     (ASANA_INTEGRATION_ID, ConnectedOAuthProvider::Asana),
     (NOTION_INTEGRATION_ID, ConnectedOAuthProvider::Notion),
+    (BITLY_INTEGRATION_ID, ConnectedOAuthProvider::Bitly),
 ];
 
 pub(crate) fn oauth_provider_for_integration_id(

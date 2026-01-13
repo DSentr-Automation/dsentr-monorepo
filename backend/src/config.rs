@@ -43,6 +43,7 @@ pub struct OAuthSettings {
     pub slack: OAuthProviderConfig,
     pub asana: OAuthProviderConfig,
     pub notion: OAuthProviderConfig,
+    pub bitly: OAuthProviderConfig,
     pub token_encryption_key: Vec<u8>,
 }
 
@@ -155,6 +156,11 @@ impl Config {
             client_secret: require_env("NOTION_INTEGRATIONS_CLIENT_SECRET")?,
             redirect_uri: require_env("NOTION_INTEGRATIONS_REDIRECT_URI")?,
         };
+        let bitly = OAuthProviderConfig {
+            client_id: require_env("BITLY_INTEGRATIONS_CLIENT_ID")?,
+            client_secret: require_env("BITLY_INTEGRATIONS_CLIENT_SECRET")?,
+            redirect_uri: require_env("BITLY_INTEGRATIONS_REDIRECT_URI")?,
+        };
 
         let encryption_key_b64 = require_env("OAUTH_TOKEN_ENCRYPTION_KEY")?;
         let token_encryption_key =
@@ -213,6 +219,7 @@ impl Config {
                 slack,
                 asana,
                 notion,
+                bitly,
                 token_encryption_key,
             },
             api_secrets_encryption_key,
@@ -353,7 +360,7 @@ mod tests {
     use std::sync::Mutex;
     use std::{panic, panic::UnwindSafe};
 
-    const REQUIRED_VARS: [&str; 24] = [
+    const REQUIRED_VARS: [&str; 27] = [
         "DATABASE_URL",
         "FRONTEND_ORIGIN",
         "GOOGLE_INTEGRATIONS_CLIENT_ID",
@@ -378,6 +385,9 @@ mod tests {
         "NOTION_INTEGRATIONS_CLIENT_ID",
         "NOTION_INTEGRATIONS_CLIENT_SECRET",
         "NOTION_INTEGRATIONS_REDIRECT_URI",
+        "BITLY_INTEGRATIONS_CLIENT_ID",
+        "BITLY_INTEGRATIONS_CLIENT_SECRET",
+        "BITLY_INTEGRATIONS_REDIRECT_URI",
     ];
 
     const OPTIONAL_VARS: [&str; 6] = [
@@ -480,6 +490,9 @@ mod tests {
             "NOTION_INTEGRATIONS_REDIRECT_URI",
             "http://localhost/notion",
         );
+        env::set_var("BITLY_INTEGRATIONS_CLIENT_ID", "bitly-client-id");
+        env::set_var("BITLY_INTEGRATIONS_CLIENT_SECRET", "bitly-client-secret");
+        env::set_var("BITLY_INTEGRATIONS_REDIRECT_URI", "http://localhost/bitly");
         let key = base64::engine::general_purpose::STANDARD.encode([0u8; 32]);
         env::set_var("OAUTH_TOKEN_ENCRYPTION_KEY", key);
         env::set_var(
