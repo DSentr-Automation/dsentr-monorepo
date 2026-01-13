@@ -98,6 +98,45 @@ const MANIFEST_ACTION_GRADIENTS = [
 const DEFAULT_ICON_KEY = 'action'
 const DEFAULT_CATEGORY = 'Actions'
 
+// Normalize manifest categories to match coded action categories
+const normalizeManifestCategory = (rawCategory?: string | null): string => {
+  if (!rawCategory || typeof rawCategory !== 'string') return DEFAULT_CATEGORY
+
+  const normalized = rawCategory.trim().toLowerCase()
+
+  // Map common variations to exact coded action categories
+  const categoryMap: Record<string, string> = {
+    email: 'Email',
+    emails: 'Email',
+    mail: 'Email',
+    messaging: 'Messaging',
+    message: 'Messaging',
+    chat: 'Messaging',
+    slack: 'Messaging',
+    teams: 'Messaging',
+    'google chat': 'Messaging',
+    'google sheets': 'Google Sheets',
+    sheets: 'Google Sheets',
+    spreadsheet: 'Google Sheets',
+    webhooks: 'Webhooks & APIs',
+    webhook: 'Webhooks & APIs',
+    api: 'Webhooks & APIs',
+    apis: 'Webhooks & APIs',
+    http: 'Webhooks & APIs',
+    request: 'Webhooks & APIs',
+    'project management': 'Project Management',
+    projects: 'Project Management',
+    asana: 'Project Management',
+    notion: 'Project Management',
+    'custom logic': 'Custom Logic',
+    code: 'Custom Logic',
+    custom: 'Custom Logic',
+    script: 'Custom Logic'
+  }
+
+  return categoryMap[normalized] || rawCategory.trim()
+}
+
 // Enforces invariant: All manifest inputs are treated as strings regardless of manifest type field
 
 // Enforces invariant: Fallback action resolution is deterministic
@@ -159,10 +198,11 @@ const buildManifestDefinition = (
   const label =
     typeof ui.label === 'string' && ui.label.length > 0 ? ui.label : actionId
   const description = typeof ui.description === 'string' ? ui.description : ''
-  const category =
+  const category = normalizeManifestCategory(
     typeof ui.category === 'string' && ui.category.length > 0
       ? ui.category
-      : DEFAULT_CATEGORY
+      : null
+  )
   const iconKey =
     typeof ui.icon === 'string' && ui.icon.trim().length > 0
       ? normalizeActionKey(ui.icon)
