@@ -1364,6 +1364,12 @@ export default function Dashboard() {
     paletteQuickAddRef.current?.(dragType)
   }, [])
   const actionDefinitions = useActionRegistry((state) => state.actions)
+  useEffect(() => {
+    console.log(
+      'Action registry actions:',
+      actionDefinitions.map((a) => a.id)
+    )
+  }, [actionDefinitions])
   const loadActionCatalog = useActionRegistry((state) => state.loadCatalog)
 
   useEffect(() => {
