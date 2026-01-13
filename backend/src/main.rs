@@ -669,7 +669,7 @@ async fn main() -> Result<()> {
         .route("/asana/callback", get(asana_connect_callback))
         .route("/notion/start", get(notion_connect_start))
         .route("/notion/callback", get(notion_connect_callback))
-        .route("/bitly", get(bitly_connect_start))
+        .route("/bitly/start", get(bitly_connect_start))
         .route("/bitly/callback", get(bitly_connect_callback))
         .layer(session_guard.clone());
 
