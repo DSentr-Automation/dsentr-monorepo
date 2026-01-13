@@ -135,9 +135,6 @@ const DEFAULT_MANIFESTS: IntegrationManifest[] = [
 const DEFAULT_MANIFESTS_BY_ID = new Map(
   DEFAULT_MANIFESTS.map((manifest) => [manifest.integrationId, manifest])
 )
-const DEFAULT_MANIFEST_IDS = new Set(
-  DEFAULT_MANIFESTS.map((manifest) => manifest.integrationId)
-)
 
 const normalizeScopes = (scopes?: string[] | null): string[] => {
   if (!Array.isArray(scopes)) return []
@@ -257,9 +254,6 @@ export default function IntegrationsTab({
       ])
     )
     ;(connections?.manifests ?? []).forEach((manifest) => {
-      if (!DEFAULT_MANIFEST_IDS.has(manifest.integrationId)) {
-        return
-      }
       manifestById.set(manifest.integrationId, mergeManifestDefaults(manifest))
     })
 
@@ -409,6 +403,11 @@ export default function IntegrationsTab({
   }, [])
 
   useEffect(() => {
+    console.log('IntegrationsTab effect', {
+      isSoloPlan,
+      workspaceId,
+      currentWorkspace
+    })
     let active = true
     ;(async () => {
       if (isSoloPlan) {
@@ -453,7 +452,8 @@ export default function IntegrationsTab({
     isSoloPlan,
     cloneSlackPersonalAuth,
     clonePersonalAuth,
-    cloneManifests
+    cloneManifests,
+    currentWorkspace
   ])
 
   const noticeText = useMemo(() => {
