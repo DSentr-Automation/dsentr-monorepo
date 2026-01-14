@@ -37,7 +37,7 @@
     ],
     "queryParams": [],
     "bodyType": "json",
-    "body": "{\"long_url\": \"{{inputs.long_url}}\"}",
+    "body": "{\"long_url\": \"{{params.long_url}}\"}",
     "formBody": []
   }
 }
