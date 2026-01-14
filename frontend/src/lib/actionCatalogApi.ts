@@ -5,6 +5,8 @@ export type ActionCatalogInput = {
   label?: string | null
   type?: string | null
   required?: boolean | null
+  provider?: string | null
+  connectionScopes?: string[] | null
 }
 
 export type ActionCatalogEntry = {

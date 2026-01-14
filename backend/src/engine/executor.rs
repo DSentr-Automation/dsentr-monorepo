@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use thiserror::Error;
 use time::OffsetDateTime;
 use tokio::time::{sleep, timeout, Instant};
@@ -28,6 +28,56 @@ const PERSISTENCE_MAX_ATTEMPTS: usize = 3;
 const PERSISTENCE_INITIAL_BACKOFF: Duration = Duration::from_millis(5);
 #[cfg(not(test))]
 const PERSISTENCE_INITIAL_BACKOFF: Duration = Duration::from_millis(100);
+
+/// Resolve OAuth access token for manifest actions
+async fn resolve_oauth_token(
+    state: &AppState,
+    connection_scope: &str,
+    connection_id: &str,
+    run: &WorkflowRun,
+) -> Result<String, String> {
+    use uuid::Uuid;
+
+    let connection_uuid =
+        Uuid::parse_str(connection_id).map_err(|_| "Invalid connection ID format".to_string())?;
+
+    match connection_scope {
+        "personal" => {
+            // Get user's personal OAuth token
+            let token = state
+                .oauth_accounts
+                .ensure_valid_access_token_for_connection(run.user_id, connection_uuid)
+                .await
+                .map_err(|e| format!("Failed to get personal OAuth token: {}", e))?;
+
+            Ok(token.access_token)
+        }
+        "workspace" => {
+            // Get workspace OAuth connection
+            let connection = state
+                .workspace_connection_repo
+                .find_by_id(connection_uuid)
+                .await
+                .map_err(|e| format!("Failed to get workspace OAuth connection: {}", e))?;
+
+            if let Some(connection) = connection {
+                // Decrypt the access token
+                use crate::utils::encryption::decrypt_secret;
+                let encrypted_token = connection.access_token;
+                let decrypted_token =
+                    decrypt_secret(&state.config.api_secrets_encryption_key, &encrypted_token)
+                        .map_err(|e| format!("Failed to decrypt workspace OAuth token: {}", e))?;
+                Ok(decrypted_token)
+            } else {
+                Err("Workspace OAuth connection not found".to_string())
+            }
+        }
+        _ => Err(format!(
+            "Unsupported connection scope: {}",
+            connection_scope
+        )),
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum ExecutorError {
@@ -377,7 +427,37 @@ pub(crate) async fn execute_run(
             .await
             .ok();
 
-        let context_value = Value::Object(context.clone());
+        // Inject OAuth token resolution for manifest actions
+        let mut enhanced_context = context.clone();
+        if let Some(params) = node.data.get("params").and_then(|v| v.as_object()) {
+            if let (Some(connection_scope), Some(connection_id)) = (
+                params.get("connectionScope").and_then(|v| v.as_str()),
+                params.get("connectionId").and_then(|v| v.as_str()),
+            ) {
+                match resolve_oauth_token(&state, connection_scope, connection_id, &run).await {
+                    Ok(access_token) => {
+                        enhanced_context.insert(
+                            "connection".to_string(),
+                            json!({
+                                "access_token": access_token
+                            }),
+                        );
+                    }
+                    Err(err) => {
+                        warn!(
+                            node_id = %node.id,
+                            connection_scope,
+                            connection_id,
+                            %err,
+                            "Failed to resolve OAuth token for manifest action"
+                        );
+                        // Continue without token - HTTP will fail with proper auth error
+                    }
+                }
+            }
+        }
+
+        let context_value = Value::Object(enhanced_context);
         let node_label = node
             .data
             .get("label")

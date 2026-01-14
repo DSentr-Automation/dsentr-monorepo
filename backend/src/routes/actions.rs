@@ -167,6 +167,18 @@ mod tests {
                 assert!(input.get("label").and_then(|v| v.as_str()).is_some());
                 assert!(input.get("type").and_then(|v| v.as_str()).is_some());
                 assert!(input.get("required").and_then(|v| v.as_bool()).is_some());
+
+                // Verify OAuth fields are preserved
+                let input_type = input.get("type").and_then(|v| v.as_str()).unwrap();
+                if input_type == "oauth_connection" {
+                    assert!(input.get("provider").and_then(|v| v.as_str()).is_some());
+                    // Verify connectionScopes field is preserved if present
+                    if let Some(scopes) = input.get("connectionScopes").and_then(|v| v.as_array()) {
+                        for scope in scopes {
+                            assert!(scope.as_str().is_some());
+                        }
+                    }
+                }
             }
         }
     }

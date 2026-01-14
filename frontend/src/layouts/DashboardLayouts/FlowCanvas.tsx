@@ -84,6 +84,7 @@ import NodeDropdownField, {
   type NodeDropdownOption,
   type NodeDropdownOptionGroup
 } from '@/components/ui/InputFields/NodeDropdownField'
+import GenericOAuthConnectionField from '@/components/workflow/Actions/GenericOAuthConnectionField'
 import KeyValuePair from '@/components/ui/ReactFlow/KeyValuePair'
 import DelayNodeConfig from '@/components/actions/logic/DelayNode'
 import {
@@ -1141,6 +1142,9 @@ function FlyoutActionFields({
   const allNodes = useWorkflowStore(selectNodes)
   const allEdges = useWorkflowStore(selectEdges)
   const setEdges = useWorkflowStore((state) => state.setEdges)
+  const currentWorkspace = useAuth(selectCurrentWorkspace)
+  const workspaceId = currentWorkspace?.workspace.id ?? null
+
   const getNodeLabel = useCallback((n: WorkflowNode) => {
     const rawLabel =
       n.data && typeof n.data === 'object' && 'label' in n.data
@@ -1301,6 +1305,57 @@ function FlyoutActionFields({
     return (
       <div className="space-y-3">
         {allInputs.map((input) => {
+          // OAuth connection input handling
+          if (input.type === 'oauth_connection') {
+            const connectionValue =
+              controller.params?.connection || controller.params?.[input.name]
+            const currentValue =
+              typeof connectionValue === 'object' && connectionValue !== null
+                ? (connectionValue as {
+                    connectionScope?: string
+                    connectionId?: string
+                    accountEmail?: string
+                  })
+                : null
+
+            const missing =
+              input.required &&
+              (!currentValue?.connectionId || !currentValue?.connectionScope)
+
+            return (
+              <div key={input.name} className="space-y-1">
+                <label className="block text-[10px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                  {input.label}
+                  {input.required ? ' *' : ''}
+                </label>
+                <GenericOAuthConnectionField
+                  provider={input.provider || ''}
+                  connectionScopes={
+                    input.connectionScopes as Array<'personal' | 'workspace'>
+                  }
+                  workspaceId={workspaceId}
+                  value={currentValue}
+                  onChange={(nextValue) => {
+                    const updates: Record<string, unknown> = {
+                      connection: nextValue,
+                      connectionScope: nextValue?.connectionScope,
+                      connectionId: nextValue?.connectionId
+                    }
+                    if (nextValue?.connectionId) {
+                      updates[input.name] = nextValue.connectionId
+                    }
+                    controller.updateParams(updates, { markDirty: true })
+                  }}
+                  disabled={!controller.effectiveCanEdit}
+                />
+                {missing ? (
+                  <p className="text-xs text-red-500">Required</p>
+                ) : null}
+              </div>
+            )
+          }
+
+          // Default text input handling for other types
           const rawValue = controller.params?.[input.name]
           const value =
             typeof rawValue === 'string'

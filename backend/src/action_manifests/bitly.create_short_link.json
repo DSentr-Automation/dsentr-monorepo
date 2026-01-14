@@ -8,13 +8,13 @@
     "icon": "bitly"
   },
   "inputs": [
-    {
-      "name": "connection_id",
-      "label": "Bitly account",
-      "type": "oauth_connection",
-      "provider": "bitly",
-      "required": true
-    },
+{
+  "name": "connection",
+  "label": "Bitly account",
+  "type": "oauth_connection",
+  "provider": "bitly",
+  "required": true
+},
     {
       "name": "long_url",
       "label": "Long URL",
@@ -35,7 +35,9 @@
         "value": "application/json"
       }
     ],
+    "queryParams": [],
     "bodyType": "json",
-    "body": "{\"long_url\": \"{{inputs.long_url}}\"}"
+    "body": "{\"long_url\": \"{{inputs.long_url}}\"}",
+    "formBody": []
   }
 }

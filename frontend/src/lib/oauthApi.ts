@@ -8,6 +8,7 @@ export type OAuthProvider =
   | 'slack'
   | 'asana'
   | 'notion'
+  | 'bitly'
 
 export type ConnectionScope = 'personal' | 'workspace'
 

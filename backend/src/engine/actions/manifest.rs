@@ -37,6 +37,9 @@ pub(crate) struct ActionInput {
     #[serde(rename = "type")]
     pub field_type: String,
     pub required: bool,
+    pub provider: Option<String>,
+    #[serde(rename = "connection_scopes")]
+    pub connection_scopes: Option<Vec<String>>,
 }
 
 #[allow(dead_code)]
@@ -250,6 +253,15 @@ fn validate_inputs(inputs: &[ActionInput]) -> Result<(), String> {
         if !seen.insert(name.to_ascii_lowercase()) {
             return Err(format!("duplicate input name `{}`", name));
         }
+
+        // OAuth-specific validation
+        if input.field_type == "oauth_connection"
+            && (input.provider.is_none() || input.provider.as_ref().unwrap().trim().is_empty()) {
+                return Err(format!(
+                    "inputs.{}.provider is required for oauth_connection type",
+                    name
+                ));
+            }
     }
     Ok(())
 }
@@ -299,4 +311,148 @@ fn is_json_file(path: &std::path::Path) -> bool {
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.eq_ignore_ascii_case("json"))
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_oauth_connection_input_success() {
+        let manifest = ActionManifestSpec {
+            action_id: "test.action".to_string(),
+            executor: "http".to_string(),
+            ui: UiMetadata {
+                label: "Test".to_string(),
+                description: "Test action".to_string(),
+                category: "Test".to_string(),
+                icon: "test".to_string(),
+            },
+            inputs: vec![ActionInput {
+                name: "connection".to_string(),
+                label: "Account".to_string(),
+                field_type: "oauth_connection".to_string(),
+                required: true,
+                provider: Some("bitly".to_string()),
+                connection_scopes: Some(vec!["personal".to_string(), "workspace".to_string()]),
+            }],
+            http: HttpManifest {
+                method: "GET".to_string(),
+                url: "https://example.com".to_string(),
+                headers: vec![],
+                query_params: vec![],
+                body_type: "raw".to_string(),
+                body: "".to_string(),
+                form_body: vec![],
+            },
+        };
+
+        let result = validate_manifest(&manifest);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_oauth_connection_input_missing_provider() {
+        let manifest = ActionManifestSpec {
+            action_id: "test.action".to_string(),
+            executor: "http".to_string(),
+            ui: UiMetadata {
+                label: "Test".to_string(),
+                description: "Test action".to_string(),
+                category: "Test".to_string(),
+                icon: "test".to_string(),
+            },
+            inputs: vec![ActionInput {
+                name: "connection".to_string(),
+                label: "Account".to_string(),
+                field_type: "oauth_connection".to_string(),
+                required: true,
+                provider: None,
+                connection_scopes: Some(vec!["personal".to_string()]),
+            }],
+            http: HttpManifest {
+                method: "GET".to_string(),
+                url: "https://example.com".to_string(),
+                headers: vec![],
+                query_params: vec![],
+                body_type: "raw".to_string(),
+                body: "".to_string(),
+                form_body: vec![],
+            },
+        };
+
+        let result = validate_manifest(&manifest);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("provider is required"));
+    }
+
+    #[test]
+    fn validate_oauth_connection_input_empty_provider() {
+        let manifest = ActionManifestSpec {
+            action_id: "test.action".to_string(),
+            executor: "http".to_string(),
+            ui: UiMetadata {
+                label: "Test".to_string(),
+                description: "Test action".to_string(),
+                category: "Test".to_string(),
+                icon: "test".to_string(),
+            },
+            inputs: vec![ActionInput {
+                name: "connection".to_string(),
+                label: "Account".to_string(),
+                field_type: "oauth_connection".to_string(),
+                required: true,
+                provider: Some("".to_string()),
+                connection_scopes: Some(vec!["personal".to_string()]),
+            }],
+            http: HttpManifest {
+                method: "GET".to_string(),
+                url: "https://example.com".to_string(),
+                headers: vec![],
+                query_params: vec![],
+                body_type: "raw".to_string(),
+                body: "".to_string(),
+
+                form_body: vec![],
+            },
+        };
+
+        let result = validate_manifest(&manifest);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("provider is required"));
+    }
+
+    #[test]
+    fn validate_regular_input_no_oauth_validation() {
+        let manifest = ActionManifestSpec {
+            action_id: "test.action".to_string(),
+            executor: "http".to_string(),
+            ui: UiMetadata {
+                label: "Test".to_string(),
+                description: "Test action".to_string(),
+                category: "Test".to_string(),
+                icon: "test".to_string(),
+            },
+            inputs: vec![ActionInput {
+                name: "text".to_string(),
+                label: "Text".to_string(),
+                field_type: "string".to_string(),
+                required: true,
+                provider: None,
+                connection_scopes: None,
+            }],
+            http: HttpManifest {
+                method: "GET".to_string(),
+                url: "https://example.com".to_string(),
+                headers: vec![],
+                query_params: vec![],
+                body_type: "raw".to_string(),
+                body: "".to_string(),
+                form_body: vec![],
+            },
+        };
+
+        let result = validate_manifest(&manifest);
+        assert!(result.is_ok());
+    }
 }

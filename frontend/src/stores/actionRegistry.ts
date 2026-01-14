@@ -55,6 +55,8 @@ export type ActionInputDefinition = {
   label: string
   type: string
   required: boolean
+  provider?: string
+  connectionScopes?: string[]
 }
 
 export type ActionDefinition = {
@@ -168,14 +170,30 @@ const normalizeInputs = (value: ActionCatalogEntry['inputs']) => {
       typeof input.label === 'string' && input.label.trim().length > 0
         ? input.label
         : name
-    // Always use 'string' type to enforce ALL_MANIFEST_INPUTS_ARE_STRINGS invariant
-    const type = 'string'
-    acc.push({
+    // Preserve original type from manifest (especially oauth_connection)
+    const type =
+      typeof input.type === 'string' && input.type.trim().length > 0
+        ? input.type.trim()
+        : 'string'
+
+    const normalizedInput: ActionInputDefinition = {
       name,
       label,
       type,
       required: Boolean(input.required)
-    })
+    }
+
+    // Preserve OAuth metadata if present
+    if (input.provider && typeof input.provider === 'string') {
+      normalizedInput.provider = input.provider.trim()
+    }
+    if (Array.isArray(input.connectionScopes)) {
+      normalizedInput.connectionScopes = input.connectionScopes.filter(
+        (scope) => typeof scope === 'string' && scope.trim().length > 0
+      )
+    }
+
+    acc.push(normalizedInput)
     return acc
   }, [])
 }
@@ -183,8 +201,16 @@ const normalizeInputs = (value: ActionCatalogEntry['inputs']) => {
 const buildEmptyParams = (inputs: ActionInputDefinition[]) => {
   const params: Record<string, unknown> = {}
   inputs.forEach((input) => {
-    // Enforces invariant: All manifest inputs initialize as empty strings
-    params[input.name] = ''
+    if (input.type === 'oauth_connection') {
+      // OAuth inputs don't initialize as strings
+      params[input.name] = ''
+      params.connection = null
+      params.connectionScope = null
+      params.connectionId = null
+    } else {
+      // Enforces invariant: All other manifest inputs initialize as empty strings
+      params[input.name] = ''
+    }
   })
   return params
 }
