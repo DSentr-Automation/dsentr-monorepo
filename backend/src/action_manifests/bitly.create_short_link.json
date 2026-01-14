@@ -9,6 +9,13 @@
   },
   "inputs": [
     {
+      "name": "connection_id",
+      "label": "Bitly account",
+      "type": "oauth_connection",
+      "provider": "bitly",
+      "required": true
+    },
+    {
       "name": "long_url",
       "label": "Long URL",
       "type": "string",
@@ -21,16 +28,14 @@
     "headers": [
       {
         "key": "Authorization",
-        "value": "Bearer {{secrets.bitly.token}}"
+        "value": "Bearer {{connection.access_token}}"
       },
       {
         "key": "Content-Type",
         "value": "application/json"
       }
     ],
-    "queryParams": [],
     "bodyType": "json",
-    "body": "{\"long_url\": \"{{inputs.long_url}}\"}",
-    "formBody": []
+    "body": "{\"long_url\": \"{{inputs.long_url}}\"}"
   }
 }
