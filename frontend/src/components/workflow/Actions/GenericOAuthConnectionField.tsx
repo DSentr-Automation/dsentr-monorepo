@@ -92,7 +92,7 @@ export default function GenericOAuthConnectionField({
             options: personalConnections.map(
               (conn): NodeDropdownOption => ({
                 label: conn.accountEmail || 'Unknown account',
-                value: `personal:${conn.connectionId || conn.id}`
+                value: `personal:${conn.connectionId ?? conn.id}`
               })
             )
           })
@@ -114,7 +114,7 @@ export default function GenericOAuthConnectionField({
             options: workspaceConnections.map(
               (conn): NodeDropdownOption => ({
                 label: `${conn.workspaceName} (${conn.accountEmail || 'Unknown account'})`,
-                value: `workspace:${conn.connectionId || conn.id}`
+                value: `workspace:${conn.connectionId ?? conn.id}`
               })
             )
           })
@@ -137,8 +137,8 @@ export default function GenericOAuthConnectionField({
       return
     }
 
-    const [scope, connectionId] = selectedValue.split(':', 2)
-    if (!scope || !connectionId) {
+    const [scope, rawId] = selectedValue.split(':', 2)
+    if (!scope || !rawId) {
       onChange(null)
       return
     }
@@ -149,14 +149,14 @@ export default function GenericOAuthConnectionField({
       const targetConnections =
         scope === 'personal' ? connections.personal : connections.workspace
       const connection = targetConnections.find(
-        (conn) => (conn.connectionId || conn.id) === connectionId
+        (conn) => (conn.connectionId ?? conn.id) === rawId
       )
       accountEmail = connection?.accountEmail
     }
 
     onChange({
       connectionScope: scope,
-      connectionId,
+      connectionId: rawId,
       accountEmail
     })
   }
