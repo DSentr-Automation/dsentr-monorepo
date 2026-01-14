@@ -3,6 +3,7 @@ use super::{
     prelude::*,
 };
 use crate::{
+    engine::actions::action_manifest_registry,
     models::{workflow_node_run::WorkflowNodeRun, workflow_run::WorkflowRun},
     routes::{options::secrets::decrypt_secret_store, plan_limits::workspace_limit_error_response},
     runaway_protection::{
@@ -11,6 +12,37 @@ use crate::{
     state::WorkspaceRunQuotaTicket,
     utils::{secrets::hydrate_secrets_into_snapshot, workflow_connection_metadata},
 };
+
+/// Hydrate action manifest HTTP data into workflow snapshot
+/// This merges manifest HTTP configuration into node.data.http only when missing
+///
+/// Invariant: Registry provides execution metadata for runtime hydration
+pub(crate) fn hydrate_http_manifests_into_snapshot(snapshot: &mut serde_json::Value) {
+    let manifest_registry = action_manifest_registry();
+
+    if let Some(nodes) = snapshot.get_mut("nodes").and_then(|n| n.as_array_mut()) {
+        for node in nodes.iter_mut() {
+            if let Some(node_data) = node.get_mut("data").and_then(|d| d.as_object_mut()) {
+                // Check if this is an HTTP executor action with missing HTTP data
+                if let Some(action_type) = node_data.get("actionType").and_then(|t| t.as_str()) {
+                    // Only hydrate for actions that resolve to HTTP executor
+                    // and don't already have http data
+                    if !node_data.contains_key("http") {
+                        // Get HTTP manifest data if available for this action type
+                        if let Some(http_manifest) =
+                            manifest_registry.get_http_manifest(action_type)
+                        {
+                            // Convert HttpManifest to JSON structure expected by executor using struct serialization
+                            if let Ok(http_json) = serde_json::to_value(http_manifest) {
+                                node_data.insert("http".to_string(), http_json);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 async fn fetch_workflow_for_member(
     app_state: &AppState,
@@ -314,6 +346,11 @@ pub async fn start_workflow_run(
 
     // Clone raw workflow JSON
     let mut snapshot = wf.data.clone();
+
+    // ---- HTTP MANIFEST HYDRATION ----
+    // Hydrate action manifest HTTP data into node.data.http for manifest-based actions
+    hydrate_http_manifests_into_snapshot(&mut snapshot);
+
     let mut trigger_context = trigger_ctx;
     if let Some(start_id) = start_from_node_id.as_deref() {
         let meta = match validate_trigger_start(&snapshot, start_id) {

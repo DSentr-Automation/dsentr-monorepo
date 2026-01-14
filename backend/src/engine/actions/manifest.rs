@@ -43,7 +43,7 @@ pub(crate) struct ActionInput {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct HttpManifest {
     pub method: String,
@@ -59,7 +59,7 @@ pub(crate) struct HttpManifest {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct KeyValuePair {
     pub key: String,
@@ -77,6 +77,7 @@ pub(crate) struct ActionManifestEntry {
 #[derive(Debug)]
 pub(crate) struct ActionManifestRegistry {
     entries: Vec<ActionManifestEntry>,
+    http_manifests: std::collections::HashMap<String, HttpManifest>,
 }
 
 impl ActionManifestRegistry {
@@ -88,7 +89,13 @@ impl ActionManifestRegistry {
     pub(crate) fn empty() -> Self {
         Self {
             entries: Vec::new(),
+            http_manifests: std::collections::HashMap::new(),
         }
+    }
+
+    /// Get HTTP manifest data by action ID for runtime hydration
+    pub(crate) fn get_http_manifest(&self, action_id: &str) -> Option<&HttpManifest> {
+        self.http_manifests.get(&action_id.to_ascii_lowercase())
     }
 }
 
@@ -114,6 +121,8 @@ pub(crate) fn action_manifest_registry() -> &'static ActionManifestRegistry {
 
 fn load_action_manifest_registry() -> Result<ActionManifestRegistry, String> {
     let mut entries = Vec::new();
+    let mut http_manifests: std::collections::HashMap<String, HttpManifest> =
+        std::collections::HashMap::new();
     let mut seen: HashSet<String> = HashSet::new();
 
     for file in ACTION_MANIFEST_DIR.files() {
@@ -141,6 +150,11 @@ fn load_action_manifest_registry() -> Result<ActionManifestRegistry, String> {
 
         let executor = normalize_id(&manifest.executor);
 
+        // Store HTTP manifest data for runtime hydration if this is an HTTP-based action
+        if executor == "http" {
+            http_manifests.insert(action_id.clone(), manifest.http);
+        }
+
         entries.push(ActionManifestEntry {
             action_id,
             executor,
@@ -151,7 +165,10 @@ fn load_action_manifest_registry() -> Result<ActionManifestRegistry, String> {
 
     entries.sort_by(|left, right| left.action_id.cmp(&right.action_id));
 
-    Ok(ActionManifestRegistry { entries })
+    Ok(ActionManifestRegistry {
+        entries,
+        http_manifests,
+    })
 }
 
 pub(crate) fn load_action_manifest_aliases() -> Result<Vec<ActionAlias>, String> {
