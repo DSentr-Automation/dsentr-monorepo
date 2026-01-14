@@ -1660,7 +1660,10 @@ impl OAuthAccountService {
             access_token: response.access_token,
             refresh_token: String::new(),
             expires_at,
-            account_email: normalize_account_label(ConnectedOAuthProvider::Bitly, login.clone().unwrap_or_else(|| "Bitly".to_string())),
+            account_email: normalize_account_label(
+                ConnectedOAuthProvider::Bitly,
+                login.clone().unwrap_or_else(|| "Bitly".to_string()),
+            ),
             provider_user_id: login.as_deref().and_then(normalize_provider_user_id),
             slack: None,
             notion: None,
@@ -2791,10 +2794,7 @@ pub(crate) fn is_revocation_signal(status: Option<StatusCode>, body: &str) -> bo
     lowered.contains("invalid_grant") || lowered.contains("token revoked")
 }
 
-fn normalize_account_label(
-    provider: ConnectedOAuthProvider,
-    account_email: String,
-) -> String {
+fn normalize_account_label(provider: ConnectedOAuthProvider, account_email: String) -> String {
     match provider {
         ConnectedOAuthProvider::Bitly => {
             format!("{account_email} (Bitly account)")

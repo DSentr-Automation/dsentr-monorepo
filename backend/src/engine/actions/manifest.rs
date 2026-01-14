@@ -256,12 +256,13 @@ fn validate_inputs(inputs: &[ActionInput]) -> Result<(), String> {
 
         // OAuth-specific validation
         if input.field_type == "oauth_connection"
-            && (input.provider.is_none() || input.provider.as_ref().unwrap().trim().is_empty()) {
-                return Err(format!(
-                    "inputs.{}.provider is required for oauth_connection type",
-                    name
-                ));
-            }
+            && (input.provider.is_none() || input.provider.as_ref().unwrap().trim().is_empty())
+        {
+            return Err(format!(
+                "inputs.{}.provider is required for oauth_connection type",
+                name
+            ));
+        }
     }
     Ok(())
 }
