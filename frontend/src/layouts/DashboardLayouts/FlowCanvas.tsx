@@ -1307,8 +1307,13 @@ function FlyoutActionFields({
         {allInputs.map((input) => {
           // OAuth connection input handling
           if (input.type === 'oauth_connection') {
-            const connectionValue =
-              controller.params?.connection || controller.params?.[input.name]
+            const connectionValue = controller.params?.connectionId
+              ? {
+                  connectionId: controller.params.connectionId,
+                  connectionScope: controller.params.connectionScope,
+                  accountEmail: controller.params.accountEmail
+                }
+              : null
             const currentValue =
               typeof connectionValue === 'object' && connectionValue !== null
                 ? (connectionValue as {
@@ -1337,12 +1342,9 @@ function FlyoutActionFields({
                   value={currentValue}
                   onChange={(nextValue) => {
                     const updates: Record<string, unknown> = {
-                      connection: nextValue,
-                      connectionScope: nextValue?.connectionScope,
-                      connectionId: nextValue?.connectionId
-                    }
-                    if (nextValue?.connectionId) {
-                      updates[input.name] = nextValue.connectionId
+                      connectionScope: nextValue?.connectionScope ?? null,
+                      connectionId: nextValue?.connectionId ?? null,
+                      accountEmail: nextValue?.accountEmail ?? null
                     }
                     controller.updateParams(updates, { markDirty: true })
                   }}
