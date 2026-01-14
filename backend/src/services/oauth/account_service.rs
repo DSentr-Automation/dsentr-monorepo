@@ -1621,18 +1621,18 @@ impl OAuthAccountService {
         &self,
         code: &str,
     ) -> Result<AuthorizationTokens, OAuthAccountError> {
-        #[derive(Deserialize)]
+        #[derive(serde::Deserialize)]
         struct BitlyTokenResponse {
             access_token: String,
             #[serde(default)]
             login: Option<String>,
-            #[serde(default)]
-            guid: Option<String>,
         }
 
         let response: BitlyTokenResponse = self
             .client
             .post("https://api-ssl.bitly.com/oauth/access_token")
+            // Critical: otherwise Bitly returns application/x-www-form-urlencoded
+            .header(reqwest::header::ACCEPT, "application/json")
             .form(&[
                 ("client_id", self.bitly.client_id.as_str()),
                 ("client_secret", self.bitly.client_secret.as_str()),
@@ -1645,22 +1645,12 @@ impl OAuthAccountService {
             .json()
             .await?;
 
-        let normalize = |value: Option<String>| {
-            value
-                .as_deref()
-                .map(str::trim)
-                .filter(|v| !v.is_empty())
-                .map(|v| v.to_string())
-        };
-
-        let account_label =
-            normalize(response.login).unwrap_or_else(|| "Bitly Account".to_string());
-
-        let provider_user_id = response
-            .guid
+        let login = response
+            .login
             .as_deref()
-            .and_then(normalize_provider_user_id);
-
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(|v| v.to_string());
         // Bitly tokens do not expire.
         let expires_at = OffsetDateTime::now_utc()
             .replace_year(2124)
@@ -1670,8 +1660,8 @@ impl OAuthAccountService {
             access_token: response.access_token,
             refresh_token: String::new(),
             expires_at,
-            account_email: account_label,
-            provider_user_id,
+            account_email: login.clone().unwrap_or_else(|| "Bitly".to_string()),
+            provider_user_id: login.as_deref().and_then(normalize_provider_user_id),
             slack: None,
             notion: None,
         })
