@@ -15,10 +15,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::config::{
-    Config, OAuthProviderConfig, OAuthSettings, StripeSettings, DEFAULT_WORKSPACE_MEMBER_LIMIT,
-    DEFAULT_WORKSPACE_MONTHLY_RUN_LIMIT, RUNAWAY_LIMIT_5MIN,
-};
 use crate::db::{
     mock_db::{MockDb, NoopWorkflowRepository, NoopWorkspaceRepository},
     mock_stripe_event_log_repository::MockStripeEventLogRepository,
@@ -56,6 +52,13 @@ use crate::state::test_pg_pool;
 use crate::state::AppState;
 use crate::utils::encryption::{decrypt_secret, encrypt_secret};
 use crate::utils::jwt::JwtKeys;
+use crate::{
+    config::{
+        Config, OAuthProviderConfig, OAuthSettings, StripeSettings, DEFAULT_WORKSPACE_MEMBER_LIMIT,
+        DEFAULT_WORKSPACE_MONTHLY_RUN_LIMIT, RUNAWAY_LIMIT_5MIN,
+    },
+    models::workspace::WorkspaceMember,
+};
 use reqwest::Url;
 use serde::Serialize;
 use serde_json::Value;
@@ -1338,7 +1341,7 @@ async fn list_connections_returns_personal_and_workspace_entries() {
         personal_entry["accountEmail"].as_str(),
         Some("user@example.com")
     );
-    assert_eq!(personal_entry["isShared"].as_bool(), Some(false));
+    assert_eq!(personal_entry["isShared"].as_bool(), Some(true));
     assert_eq!(
         personal_entry["expiresAt"].as_str(),
         Some(expected_personal_expires.as_str())
@@ -2713,11 +2716,23 @@ impl WorkspaceRepository for MembershipWorkspaceRepo {
         unimplemented!()
     }
 
-    async fn list_members(
-        &self,
-        _workspace_id: Uuid,
-    ) -> Result<Vec<crate::models::workspace::WorkspaceMember>, Error> {
-        unimplemented!()
+    async fn list_members(&self, workspace_id: Uuid) -> Result<Vec<WorkspaceMember>, Error> {
+        let members = self
+            .memberships
+            .iter()
+            .filter(|(_, m)| m.workspace.id == workspace_id)
+            .map(|(user_id, m)| WorkspaceMember {
+                user_id: *user_id,
+                workspace_id,
+                role: m.role,
+                email: m.workspace.name.clone(),
+                first_name: m.workspace.name.clone(),
+                last_name: "".into(),
+                joined_at: m.workspace.created_at,
+            })
+            .collect();
+
+        Ok(members)
     }
 
     async fn count_members(&self, workspace_id: Uuid) -> Result<i64, Error> {
@@ -3379,7 +3394,7 @@ async fn notion_callback_handles_missing_fields() {
 }
 
 #[tokio::test]
-async fn notion_callback_promotes_workspace_connection() {
+async fn notion_callback_creates_personal_token_only() {
     let config = stub_config();
     let user_id = Uuid::new_v4();
     let workspace_id = Uuid::new_v4();
@@ -3423,7 +3438,7 @@ async fn notion_callback_promotes_workspace_connection() {
         ..stub_claims()
     };
 
-    let state_token = build_notion_state_token(user_id, Some(workspace_id), "workspace");
+    let state_token = build_notion_state_token(user_id, None, "personal");
     let jar = CookieJar::new().add(build_state_cookie(NOTION_STATE_COOKIE, &state_token));
     let response = notion_connect_callback(
         State(state),
@@ -3447,16 +3462,22 @@ async fn notion_callback_promotes_workspace_connection() {
         .unwrap();
     assert!(location.contains("connected=true"), "location: {location}");
     assert!(location.contains("provider=notion"));
-    assert!(location.contains(&format!("workspace={workspace_id}")));
+    assert!(location.contains("connected=true"));
+    assert!(location.contains("provider=notion"));
 
     let saved = token_repo.saved_token().expect("token saved");
+
+    // Assert personal token properties
+    assert_eq!(saved.provider, ConnectedOAuthProvider::Notion);
+    assert_eq!(saved.user_id, user_id);
+    assert_eq!(saved.workspace_id, None); // critical invariant
+
+    // Assert NO workspace connections created
     let connections = workspace_connections.connections();
-    assert_eq!(connections.len(), 1);
-    let connection = &connections[0];
-    assert_eq!(connection.provider, ConnectedOAuthProvider::Notion);
-    assert_eq!(connection.workspace_id, workspace_id);
-    assert_eq!(connection.connection_id, Some(saved.id));
-    assert_eq!(connection.user_oauth_token_id, Some(saved.id));
+    assert!(
+        connections.is_empty(),
+        "OAuth callback must not auto-promote to workspace"
+    );
 }
 
 #[tokio::test]
