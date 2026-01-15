@@ -1,10 +1,13 @@
-import { JSX, useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ChevronDown, MoreVertical } from 'lucide-react'
 
-import SlackIcon from '@/assets/svg-components/third-party/SlackIcon'
 import { errorMessage } from '@/lib/errorMessage'
-import AsanaIcon from '@/assets/svg-components/third-party/AsanaIcon'
 import { API_BASE_URL } from '@/lib/config'
+import { getIntegrationIcon } from '@/components/integrations/iconRegistry'
+import ActionIcon from '@/assets/svg-components/ActionIcon'
+import { selectCurrentWorkspace, useAuth } from '@/stores/auth'
+import { normalizePlanTier, type PlanTier } from '@/lib/planTiers'
+import ConfirmDialog from '@/components/ui/dialog/ConfirmDialog'
 import {
   OAuthProvider,
   WorkspaceConnectionInfo,
@@ -15,16 +18,10 @@ import {
   unshareWorkspaceConnection,
   setCachedConnections,
   type GroupedConnectionsSnapshot,
-  type IntegrationManifest,
   type PersonalAuthStatus,
-  type PersonalConnectionRecord
+  type PersonalConnectionRecord,
+  type IntegrationManifest
 } from '@/lib/oauthApi'
-import { selectCurrentWorkspace, useAuth } from '@/stores/auth'
-import { normalizePlanTier, type PlanTier } from '@/lib/planTiers'
-import ConfirmDialog from '@/components/ui/dialog/ConfirmDialog'
-import GoogleIcon from '@/assets/svg-components/third-party/GoogleIcon'
-import MicrosoftIcon from '@/assets/svg-components/third-party/MicrosoftIcon'
-import NotionIcon from '@/assets/svg-components/third-party/NotionIcon'
 import { useWorkflowStore } from '@/stores/workflowStore'
 
 export type IntegrationNotice =
@@ -34,16 +31,6 @@ export type IntegrationNotice =
 interface IntegrationsTabProps {
   notice?: IntegrationNotice | null
   onDismissNotice?: () => void
-}
-
-const ICON_BY_KEY: Partial<
-  Record<string, (props: React.SVGProps<SVGSVGElement>) => JSX.Element>
-> = {
-  slack: SlackIcon,
-  google: GoogleIcon,
-  microsoft: MicrosoftIcon,
-  asana: AsanaIcon,
-  notion: NotionIcon
 }
 
 const DEFAULT_MANIFESTS: IntegrationManifest[] = [
@@ -989,20 +976,13 @@ export default function IntegrationsTab({
                     <div className="flex items-center gap-3">
                       <div className="flex h-10 w-10 items-center justify-center rounded-md border border-dashed border-zinc-300 bg-zinc-50 text-xs font-semibold uppercase text-zinc-400 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-500">
                         {(() => {
-                          const Logo = ICON_BY_KEY[iconKey]
-                          if (Logo) {
-                            return (
-                              <Logo
-                                aria-hidden="true"
-                                className="h-7 w-7"
-                                focusable="false"
-                              />
-                            )
-                          }
+                          const Icon = getIntegrationIcon(iconKey) ?? ActionIcon
                           return (
-                            <span aria-hidden="true">
-                              {displayName.slice(0, 1)}
-                            </span>
+                            <Icon
+                              aria-hidden="true"
+                              className="h-7 w-7"
+                              focusable="false"
+                            />
                           )
                         })()}
                       </div>
