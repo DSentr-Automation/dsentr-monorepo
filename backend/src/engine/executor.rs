@@ -457,6 +457,11 @@ pub(crate) async fn execute_run(
             }
         }
 
+        // Merge node params into templating context
+        if let Some(params) = node.data.get("params") {
+            enhanced_context.insert("params".to_string(), params.clone());
+        }
+
         let context_value = Value::Object(enhanced_context);
         let node_label = node
             .data
