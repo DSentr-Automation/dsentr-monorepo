@@ -114,6 +114,17 @@
           }
         }
       }
+    },
+    "egress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allow"],
+      "properties": {
+        "allow": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
     }
   }
 }

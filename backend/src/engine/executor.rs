@@ -186,9 +186,17 @@ pub(crate) async fn execute_run(
         .ok()
         .unwrap_or_default();
     let env_allowed_hosts = parse_host_list(&allowlist_env);
+    let manifest_allowed_hosts = collect_manifest_allowlist_from_snapshot(&run.snapshot);
+
+    // Combine env + manifest before existing merge logic
+    let mut combined_env_hosts = env_allowed_hosts.clone();
+    combined_env_hosts.extend(manifest_allowed_hosts);
+    combined_env_hosts.sort();
+    combined_env_hosts.dedup();
+
     let snapshot_allowlist = collect_snapshot_allowlist(run.snapshot.get("_egress_allowlist"));
     let (allowed_hosts, rejected_allowlist) =
-        merge_advisory_allowlist(&env_allowed_hosts, &snapshot_allowlist);
+        merge_advisory_allowlist(&combined_env_hosts, &snapshot_allowlist);
 
     if !rejected_allowlist.is_empty() {
         warn!(
@@ -891,6 +899,37 @@ fn collect_snapshot_allowlist(value: Option<&Value>) -> Vec<String> {
             }
         }
     }
+    hosts.sort();
+    hosts.dedup();
+    hosts
+}
+
+fn collect_manifest_allowlist_from_snapshot(snapshot: &Value) -> Vec<String> {
+    use crate::engine::actions::action_manifest_registry;
+
+    let manifest_registry = action_manifest_registry();
+    let mut hosts: Vec<String> = Vec::new();
+
+    if let Some(nodes) = snapshot.get("nodes").and_then(|n| n.as_array()) {
+        for node in nodes {
+            if let Some(action_type) = node
+                .get("data")
+                .and_then(|d| d.get("actionType"))
+                .and_then(|t| t.as_str())
+            {
+                if let Some(egress_manifest) = manifest_registry.get_egress_manifest(action_type) {
+                    hosts.extend(
+                        egress_manifest
+                            .allow
+                            .iter()
+                            .map(|h| h.trim().to_lowercase())
+                            .filter(|h| !h.is_empty()),
+                    );
+                }
+            }
+        }
+    }
+
     hosts.sort();
     hosts.dedup();
     hosts

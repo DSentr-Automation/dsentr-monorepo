@@ -39,5 +39,8 @@
     "bodyType": "json",
     "body": "{\"long_url\": \"{{params.long_url}}\"}",
     "formBody": []
+  },
+  "egress": {
+    "allow": ["api-ssl.bitly.com"]
   }
 }

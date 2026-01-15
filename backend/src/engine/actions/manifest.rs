@@ -17,6 +17,13 @@ pub(crate) struct ActionManifestSpec {
     pub ui: UiMetadata,
     pub inputs: Vec<ActionInput>,
     pub http: HttpManifest,
+    pub egress: Option<EgressManifest>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EgressManifest {
+    pub allow: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -78,6 +85,7 @@ pub(crate) struct ActionManifestEntry {
 pub(crate) struct ActionManifestRegistry {
     entries: Vec<ActionManifestEntry>,
     http_manifests: std::collections::HashMap<String, HttpManifest>,
+    egress_manifests: std::collections::HashMap<String, EgressManifest>,
 }
 
 impl ActionManifestRegistry {
@@ -90,12 +98,18 @@ impl ActionManifestRegistry {
         Self {
             entries: Vec::new(),
             http_manifests: std::collections::HashMap::new(),
+            egress_manifests: std::collections::HashMap::new(),
         }
     }
 
     /// Get HTTP manifest data by action ID for runtime hydration
     pub(crate) fn get_http_manifest(&self, action_id: &str) -> Option<&HttpManifest> {
         self.http_manifests.get(&action_id.to_ascii_lowercase())
+    }
+
+    /// Get egress manifest data by action ID for runtime allowlist collection
+    pub(crate) fn get_egress_manifest(&self, action_id: &str) -> Option<&EgressManifest> {
+        self.egress_manifests.get(&action_id.to_ascii_lowercase())
     }
 }
 
@@ -122,6 +136,8 @@ pub(crate) fn action_manifest_registry() -> &'static ActionManifestRegistry {
 fn load_action_manifest_registry() -> Result<ActionManifestRegistry, String> {
     let mut entries = Vec::new();
     let mut http_manifests: std::collections::HashMap<String, HttpManifest> =
+        std::collections::HashMap::new();
+    let mut egress_manifests: std::collections::HashMap<String, EgressManifest> =
         std::collections::HashMap::new();
     let mut seen: HashSet<String> = HashSet::new();
 
@@ -155,6 +171,11 @@ fn load_action_manifest_registry() -> Result<ActionManifestRegistry, String> {
             http_manifests.insert(action_id.clone(), manifest.http);
         }
 
+        // Store egress manifest data if present
+        if let Some(egress) = manifest.egress {
+            egress_manifests.insert(action_id.clone(), egress);
+        }
+
         entries.push(ActionManifestEntry {
             action_id,
             executor,
@@ -168,6 +189,7 @@ fn load_action_manifest_registry() -> Result<ActionManifestRegistry, String> {
     Ok(ActionManifestRegistry {
         entries,
         http_manifests,
+        egress_manifests,
     })
 }
 
@@ -230,6 +252,7 @@ fn validate_manifest(manifest: &ActionManifestSpec) -> Result<(), String> {
 
     validate_ui(&manifest.ui)?;
     validate_inputs(&manifest.inputs)?;
+    validate_egress(&manifest.egress)?;
 
     let executor = manifest.executor.trim().to_ascii_lowercase();
     match executor.as_str() {
@@ -320,6 +343,20 @@ fn validate_kv_list(label: &str, list: &[KeyValuePair]) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_egress(egress: &Option<EgressManifest>) -> Result<(), String> {
+    if let Some(egress) = egress {
+        if egress.allow.is_empty() {
+            return Err("egress.allow cannot be empty when egress is specified".to_string());
+        }
+        for host in &egress.allow {
+            if host.trim().is_empty() {
+                return Err("egress.allow entries cannot be empty".to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
 fn normalize_id(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
@@ -363,6 +400,7 @@ mod tests {
                 body: "".to_string(),
                 form_body: vec![],
             },
+            egress: None,
         };
 
         let result = validate_manifest(&manifest);
@@ -397,6 +435,7 @@ mod tests {
                 body: "".to_string(),
                 form_body: vec![],
             },
+            egress: None,
         };
 
         let result = validate_manifest(&manifest);
@@ -433,6 +472,7 @@ mod tests {
 
                 form_body: vec![],
             },
+            egress: None,
         };
 
         let result = validate_manifest(&manifest);
@@ -468,6 +508,7 @@ mod tests {
                 body: "".to_string(),
                 form_body: vec![],
             },
+            egress: None,
         };
 
         let result = validate_manifest(&manifest);
