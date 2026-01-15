@@ -14,11 +14,7 @@ import WorkflowToolbar from './Toolbar'
 import FlowCanvas from './FlowCanvas'
 import ActionIcon from '@/assets/svg-components/ActionIcon'
 import ConditionIcon from '@/assets/svg-components/ConditionIcon'
-import SlackIcon from '@/assets/svg-components/third-party/SlackIcon'
-import GoogleIcon from '@/assets/svg-components/third-party/GoogleIcon'
-import MicrosoftIcon from '@/assets/svg-components/third-party/MicrosoftIcon'
-import AsanaIcon from '@/assets/svg-components/third-party/AsanaIcon'
-import NotionIcon from '@/assets/svg-components/third-party/NotionIcon'
+import { INTEGRATION_ICONS } from '@/components/integrations/iconRegistry'
 import { ReactFlowProvider } from '@xyflow/react'
 import { ChevronDown, ChevronUp, Plus, Search } from 'lucide-react'
 import { selectCurrentWorkspace, useAuth } from '@/stores/auth'
@@ -74,11 +70,7 @@ const ICON_BY_KEY: Partial<
   Record<string, ComponentType<SVGProps<SVGSVGElement>>>
 > = {
   action: ActionIcon,
-  slack: SlackIcon,
-  google: GoogleIcon,
-  microsoft: MicrosoftIcon,
-  asana: AsanaIcon,
-  notion: NotionIcon
+  ...INTEGRATION_ICONS
 }
 
 const normalizeIconKey = (value?: string | null) =>
