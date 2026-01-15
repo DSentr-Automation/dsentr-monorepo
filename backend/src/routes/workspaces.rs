@@ -4021,7 +4021,7 @@ mod tests {
         assert_eq!(inserted[0].refresh_token, encrypted_refresh);
 
         let marks = user_repo.marks();
-        assert_eq!(marks, vec![(user_id, ConnectedOAuthProvider::Google, true)]);
+        assert_eq!(marks, vec![]); // No shared flag should be set per requirements
 
         let audits = connection_repo.audits();
         assert_eq!(audits.len(), 1);
@@ -4255,7 +4255,7 @@ mod tests {
         assert_eq!(inserted[0].refresh_token, encrypted_refresh);
 
         let marks = user_repo.marks();
-        assert_eq!(marks, vec![(user_id, ConnectedOAuthProvider::Google, true)]);
+        assert_eq!(marks, vec![]); // No shared flag should be set per requirements
 
         let audits = connection_repo.audits();
         assert_eq!(audits.len(), 1);

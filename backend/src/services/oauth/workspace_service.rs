@@ -135,7 +135,7 @@ impl WorkspaceOAuthService {
         if provider == ConnectedOAuthProvider::Slack {
             return Err(WorkspaceOAuthError::SlackInstallRequired);
         }
-        self.ensure_membership(actor_id, workspace_id).await?;
+        self.ensure_workspace_admin(actor_id, workspace_id).await?;
 
         // Load existing personal token (OAuth already completed earlier)
         let token = self.load_token(actor_id, provider, token_id).await?;
@@ -238,7 +238,8 @@ impl WorkspaceOAuthService {
             .await?;
 
         // Mark personal token as shared
-        let _ = self.user_tokens.mark_shared_by_id(token.id, true).await?;
+        // Note: Sharing state is derived from WorkspaceConnection references
+        // No need to mark UserOAuthToken as shared
 
         if provider == ConnectedOAuthProvider::Slack
             && incoming_webhook_url.is_some()
@@ -442,6 +443,32 @@ impl WorkspaceOAuthService {
             return Err(WorkspaceOAuthError::Forbidden);
         }
         Ok(())
+    }
+
+    /// Ensure user has admin or owner permissions in workspace
+    async fn ensure_workspace_admin(
+        &self,
+        user_id: Uuid,
+        workspace_id: Uuid,
+    ) -> Result<(), WorkspaceOAuthError> {
+        use crate::models::workspace::WorkspaceRole;
+
+        // Check if user is a member first
+        if !self.workspace_repo.is_member(workspace_id, user_id).await? {
+            return Err(WorkspaceOAuthError::Forbidden);
+        }
+
+        // Get user's role in workspace
+        let members = self.workspace_repo.list_members(workspace_id).await?;
+        let user_role = members
+            .iter()
+            .find(|member| member.user_id == user_id)
+            .map(|member| &member.role);
+
+        match user_role {
+            Some(WorkspaceRole::Owner) | Some(WorkspaceRole::Admin) => Ok(()),
+            _ => Err(WorkspaceOAuthError::Forbidden),
+        }
     }
 
     /// Purges connections for a departing member. The caller is expected to have

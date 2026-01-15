@@ -336,7 +336,11 @@ pub async fn list_connections(
                 }
             }
         }
-        personal.push(personal_payload_from_token(token, &personal_owner));
+        personal.push(personal_payload_from_token(
+            token,
+            &personal_owner,
+            &workspace_connections,
+        ));
     }
 
     for connection in workspace_connections {
@@ -455,7 +459,7 @@ pub async fn list_provider_connections(
     let personal_owner = connection_owner_from_claims(user_id, &claims);
     let personal = personal_tokens
         .into_iter()
-        .map(|token| personal_payload_from_token(token, &personal_owner))
+        .map(|token| personal_payload_from_token(token, &personal_owner, &workspace_connections))
         .collect::<Vec<_>>();
     let workspace = workspace_connections
         .into_iter()
@@ -491,6 +495,21 @@ pub async fn get_connection_by_id(
         Err(err) => return map_oauth_error(err),
     };
 
+    // Load workspace connections for sharing status derivation
+    let workspace_connections: Vec<
+        crate::db::workspace_connection_repository::WorkspaceConnectionListing,
+    > = match state
+        .workspace_connection_repo
+        .list_for_user_memberships(user_id)
+        .await
+    {
+        Ok(connections) => connections,
+        Err(err) => {
+            error!(user_id = %user_id, ?err, "Failed to load workspace connections for connection lookup");
+            return JsonResponse::server_error("Failed to load connections").into_response();
+        }
+    };
+
     if let Some(token) = personal_tokens
         .iter()
         .find(|token| token.id == connection_id)
@@ -498,7 +517,11 @@ pub async fn get_connection_by_id(
         return Json(ConnectionLookupResponse {
             success: true,
             connection_id: Some(connection_id),
-            personal: Some(personal_payload_from_token(token.clone(), &personal_owner)),
+            personal: Some(personal_payload_from_token(
+                token.clone(),
+                &personal_owner,
+                &workspace_connections,
+            )),
             workspace: None,
         })
         .into_response();
@@ -624,13 +647,19 @@ fn connection_owner_from_claims(user_id: Uuid, claims: &Claims) -> ConnectionOwn
 fn personal_payload_from_token(
     token: StoredOAuthToken,
     owner: &ConnectionOwnerPayload,
+    workspace_connections: &[crate::db::workspace_connection_repository::WorkspaceConnectionListing],
 ) -> PersonalConnectionPayload {
+    // Derive sharing state from workspace connections rather than database flag
+    let is_shared = workspace_connections
+        .iter()
+        .any(|conn| conn.connection_id == Some(token.id));
+
     PersonalConnectionPayload {
         id: token.id,
         provider: token.provider,
         account_email: token.account_email,
         expires_at: token.expires_at,
-        is_shared: token.is_shared,
+        is_shared,
         last_refreshed_at: token.updated_at,
         requires_reconnect: false,
         owner: owner.clone(),
