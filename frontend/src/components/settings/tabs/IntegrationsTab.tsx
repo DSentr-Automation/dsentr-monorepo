@@ -390,11 +390,6 @@ export default function IntegrationsTab({
   }, [])
 
   useEffect(() => {
-    console.log('IntegrationsTab effect', {
-      isSoloPlan,
-      workspaceId,
-      currentWorkspace
-    })
     let active = true
     ;(async () => {
       if (isSoloPlan) {

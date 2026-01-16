@@ -175,12 +175,24 @@ const normalizeInputs = (value: ActionCatalogEntry['inputs']) => {
       typeof input.type === 'string' && input.type.trim().length > 0
         ? input.type.trim()
         : 'string'
+    const scopes = Array.isArray((input as any).connectionScopes)
+      ? (input as any).connectionScopes
+      : Array.isArray((input as any).connection_scopes)
+        ? (input as any).connection_scopes
+        : null
+    let connectionScopes = []
+    if (scopes) {
+      connectionScopes = scopes.filter(
+        (scope: string) => typeof scope === 'string' && scope.trim().length > 0
+      )
+    }
 
     const normalizedInput: ActionInputDefinition = {
       name,
       label,
       type,
-      required: Boolean(input.required)
+      required: Boolean(input.required),
+      connectionScopes
     }
 
     // Preserve OAuth metadata if present
