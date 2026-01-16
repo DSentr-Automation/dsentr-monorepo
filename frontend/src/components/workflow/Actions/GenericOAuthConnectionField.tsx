@@ -82,7 +82,6 @@ export default function GenericOAuthConnectionField({
         const personalConnections = connections.personal.filter(
           (conn) =>
             conn.provider === (provider as OAuthProvider) &&
-            conn.connected &&
             !conn.requiresReconnect
         )
 
@@ -104,7 +103,6 @@ export default function GenericOAuthConnectionField({
         const workspaceConnections = connections.workspace.filter(
           (conn) =>
             conn.provider === (provider as OAuthProvider) &&
-            conn.connected &&
             !conn.requiresReconnect
         )
 
