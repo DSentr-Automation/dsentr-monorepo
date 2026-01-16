@@ -47,6 +47,7 @@ pub(crate) struct ActionInput {
     pub provider: Option<String>,
     #[serde(rename = "connection_scopes")]
     pub connection_scopes: Option<Vec<String>>,
+    pub options: Option<Vec<String>>,
 }
 
 #[allow(dead_code)]
