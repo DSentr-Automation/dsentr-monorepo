@@ -39,19 +39,33 @@
       "type": "array",
       "items": {
         "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "name",
-          "label",
-          "type",
-          "required"
-        ],
+        "required": ["name", "label", "type", "required"],
         "properties": {
-          "name": {"type": "string", "minLength": 1},
-          "label": {"type": "string", "minLength": 1},
-          "type": {"type": "string", "minLength": 1},
-          "required": {"type": "boolean"}
-        }
+          "name": { "type": "string" },
+          "label": { "type": "string" },
+          "type": { "type": "string" },
+          "required": { "type": "boolean" },
+
+          "provider": {
+            "type": "string",
+            "minLength": 1
+          },
+          "scope": {
+            "type": "string",
+            "enum": ["personal", "workspace", "personal_and_workspace"]
+          }
+        },
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": { "type": { "const": "oauth_connection" } }
+            },
+            "then": {
+              "required": ["provider"]
+            }
+          }
+        ]
       }
     },
     "http": {

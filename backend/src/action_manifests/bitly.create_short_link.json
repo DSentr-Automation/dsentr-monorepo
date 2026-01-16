@@ -8,13 +8,14 @@
     "icon": "bitly"
   },
   "inputs": [
-{
-  "name": "connection",
-  "label": "Bitly account",
-  "type": "oauth_connection",
-  "provider": "bitly",
-  "required": true
-},
+    {
+      "name": "connection",
+      "label": "Bitly account",
+      "type": "oauth_connection",
+      "provider": "bitly",
+      "scope": "personal_and_workspace",
+      "required": true
+    },
     {
       "name": "long_url",
       "label": "Long URL",
