@@ -1,0 +1,87 @@
+{
+  "action_id": "raindrop.bookmark",
+  "executor": "http",
+  "ui": {
+    "label": "Bookmark",
+    "description": "Create, update, or delete a bookmark in Raindrop.io.",
+    "category": "Bookmarks",
+    "icon": "raindrop"
+  },
+
+  "inputs": [
+    {
+      "name": "connection",
+      "label": "Raindrop account",
+      "type": "oauth_connection",
+      "provider": "raindrop",
+      "connection_scopes": ["personal", "workspace"],
+      "required": true
+    },
+
+    {
+      "name": "operation",
+      "label": "Operation",
+      "type": "enum",
+      "options": ["create", "update", "delete"],
+      "required": true
+    },
+
+    {
+      "name": "bookmark_id",
+      "label": "Bookmark ID",
+      "type": "string",
+      "required": false
+    },
+
+    {
+      "name": "url",
+      "label": "URL",
+      "type": "string",
+      "required": false
+    },
+
+    {
+      "name": "title",
+      "label": "Title",
+      "type": "string",
+      "required": false
+    },
+
+    {
+      "name": "tags",
+      "label": "Tags (comma separated)",
+      "type": "string",
+      "required": false
+    },
+
+    {
+      "name": "excerpt",
+      "label": "Note",
+      "type": "string",
+      "required": false
+    }
+  ],
+
+  "http": {
+    "method": "{{params._method}}",
+    "url": "{{params._url}}",
+    "headers": [
+      {
+        "key": "Authorization",
+        "value": "Bearer {{connection.access_token}}"
+      },
+      {
+        "key": "Content-Type",
+        "value": "application/json"
+      }
+    ],
+    "queryParams": [],
+    "bodyType": "json",
+    "body": "{{params._body}}",
+    "formBody": []
+  },
+
+  "egress": {
+    "allow": ["api.raindrop.io"]
+  }
+}

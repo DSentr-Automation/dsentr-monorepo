@@ -1300,11 +1300,137 @@ function FlyoutActionFields({
     requiredInputMissing
   ])
 
+  // Operation-to-execution param mapping for Raindrop
+  useEffect(() => {
+    if (!managesDynamicInputs) return
+    if (actionDefinition.actionType !== 'raindrop.bookmark') return
+
+    const operation = controller.params?.operation as string
+    if (!operation) return
+
+    let executionParams: Record<string, string> = {}
+
+    switch (operation) {
+      case 'create':
+        executionParams = {
+          _method: 'POST',
+          _url: 'https://api.raindrop.io/rest/v1/raindrop',
+          _body: JSON.stringify({
+            link: '{{params.url}}',
+            title: '{{params.title}}',
+            tags: '{{params.tags}}',
+            excerpt: '{{params.excerpt}}'
+          })
+        }
+        break
+      case 'update':
+        executionParams = {
+          _method: 'PUT',
+          _url: `https://api.raindrop.io/rest/v1/raindrop/{{params.bookmark_id}}`,
+          _body: JSON.stringify({
+            title: '{{params.title}}',
+            tags: '{{params.tags}}',
+            excerpt: '{{params.excerpt}}'
+          })
+        }
+        break
+      case 'delete':
+        executionParams = {
+          _method: 'DELETE',
+          _url: `https://api.raindrop.io/rest/v1/raindrop/{{params.bookmark_id}}`,
+          _body: ''
+        }
+        break
+      default:
+        return
+    }
+
+    // Update execution params if they changed
+    const needsUpdate = Object.keys(executionParams).some(
+      (key) => controller.params?.[key] !== executionParams[key]
+    )
+
+    if (needsUpdate) {
+      controller.updateParams(executionParams, { markDirty: false })
+    }
+  }, [
+    controller,
+    managesDynamicInputs,
+    actionDefinition.actionType,
+    controller.params?.operation,
+    controller.params?.bookmark_id,
+    controller.params?.url,
+    controller.params?.title,
+    controller.params?.tags,
+    controller.params?.excerpt
+  ])
+
+  // Set default operation for Raindrop when none is selected
+  useEffect(() => {
+    if (!managesDynamicInputs) return
+    if (actionDefinition.actionType !== 'raindrop.bookmark') return
+
+    const operation = controller.params?.operation as string
+    if (operation) return // Already has an operation
+
+    // Find the operation input and set it to the first option
+    const operationInput = allInputs.find(
+      (input) => input.name === 'operation' && input.type === 'enum'
+    )
+    if (operationInput?.options?.[0]) {
+      controller.updateParams(
+        { operation: operationInput.options[0] },
+        { markDirty: false }
+      )
+    }
+  }, [
+    controller,
+    managesDynamicInputs,
+    actionDefinition.actionType,
+    controller.params?.operation,
+    allInputs
+  ])
+
+  // Field visibility logic based on operation
+  const getVisibleInputs = useMemo(() => {
+    if (
+      !managesDynamicInputs ||
+      actionDefinition.actionType !== 'raindrop.bookmark'
+    ) {
+      return allInputs
+    }
+
+    const operation = controller.params?.operation as string
+    if (!operation) return allInputs
+
+    // Always show connection and operation inputs
+    const alwaysVisible = ['connection', 'operation']
+
+    // Field visibility by operation
+    const operationFields: Record<string, string[]> = {
+      create: ['url', 'title', 'tags', 'excerpt'],
+      update: ['bookmark_id', 'title', 'tags', 'excerpt'],
+      delete: ['bookmark_id']
+    }
+
+    const visibleFields = new Set([
+      ...alwaysVisible,
+      ...(operationFields[operation] || [])
+    ])
+
+    return allInputs.filter((input) => visibleFields.has(input.name))
+  }, [
+    managesDynamicInputs,
+    actionDefinition.actionType,
+    controller.params?.operation,
+    allInputs
+  ])
+
   const renderDynamicInputs = () => {
-    if (!managesDynamicInputs || allInputs.length === 0) return null
+    if (!managesDynamicInputs || getVisibleInputs.length === 0) return null
     return (
       <div className="space-y-3">
-        {allInputs.map((input) => {
+        {getVisibleInputs.map((input) => {
           // OAuth connection input handling
           if (input.type === 'oauth_connection') {
             const connectionValue = controller.params?.connectionId
@@ -1348,6 +1474,46 @@ function FlyoutActionFields({
                     }
                     controller.updateParams(updates, { markDirty: true })
                   }}
+                  disabled={!controller.effectiveCanEdit}
+                />
+                {missing ? (
+                  <p className="text-xs text-red-500">Required</p>
+                ) : null}
+              </div>
+            )
+          }
+
+          // Enum/dropdown input handling
+          if (input.type === 'enum' && input.options) {
+            const rawValue = controller.params?.[input.name]
+            const value =
+              typeof rawValue === 'string'
+                ? rawValue
+                : rawValue == null
+                  ? input.options[0] || ''
+                  : String(rawValue)
+            const missing = input.required && value.trim().length === 0
+
+            const dropdownOptions = input.options.map((option) => ({
+              label: option,
+              value: option
+            }))
+
+            return (
+              <div key={input.name} className="space-y-1">
+                <label className="block text-[10px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                  {input.label}
+                  {input.required ? ' *' : ''}
+                </label>
+                <NodeDropdownField
+                  value={value}
+                  options={dropdownOptions}
+                  onChange={(nextValue) =>
+                    controller.updateParams(
+                      { [input.name]: nextValue },
+                      { markDirty: true }
+                    )
+                  }
                   disabled={!controller.effectiveCanEdit}
                 />
                 {missing ? (

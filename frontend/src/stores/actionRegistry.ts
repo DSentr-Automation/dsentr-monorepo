@@ -57,6 +57,7 @@ export type ActionInputDefinition = {
   required: boolean
   provider?: string
   connectionScopes?: string[]
+  options?: string[]
 }
 
 export type ActionDefinition = {
@@ -202,6 +203,13 @@ const normalizeInputs = (value: ActionCatalogEntry['inputs']) => {
     if (Array.isArray(input.connectionScopes)) {
       normalizedInput.connectionScopes = input.connectionScopes.filter(
         (scope) => typeof scope === 'string' && scope.trim().length > 0
+      )
+    }
+
+    // Preserve enum options if present
+    if (Array.isArray((input as any).options)) {
+      normalizedInput.options = (input as any).options.filter(
+        (option: any) => typeof option === 'string' && option.trim().length > 0
       )
     }
 
