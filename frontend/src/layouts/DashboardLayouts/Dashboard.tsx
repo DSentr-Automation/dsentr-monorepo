@@ -1382,7 +1382,7 @@ export default function Dashboard() {
       if (action.visibleInPicker === false) return
       const heading = action.category?.trim() || 'Actions'
       const iconKey = normalizeIconKey(action.iconKey)
-      const IconComponent = ICON_BY_KEY[iconKey] ?? ActionIcon
+      const IconComponent = ActionIcon ?? ICON_BY_KEY[iconKey]
       const label = action.label?.trim() || action.id
       const description = action.description || ''
       const tile = {
