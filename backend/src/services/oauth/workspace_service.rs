@@ -51,6 +51,19 @@ pub struct DecryptedWorkspaceConnection {
     pub incoming_webhook_url: Option<String>,
 }
 
+/// Checks if a Slack workspace token needs refresh based on expiry time
+/// Slack is weird - treat it as weird with specific logic
+fn slack_token_needs_refresh(expires_at: &Option<OffsetDateTime>) -> bool {
+    match expires_at {
+        Some(expiry) => {
+            let now = OffsetDateTime::now_utc();
+            // Refresh if expired or expires within 5 minutes
+            (*expiry - now).whole_minutes() <= 5
+        }
+        None => false, // No expiry info = assume valid
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum WorkspaceOAuthError {
     #[error("token not found")]
@@ -616,6 +629,18 @@ impl WorkspaceOAuthService {
 
         let mut decrypted = self.decrypt_connection(record.clone())?;
         if decrypted.provider == ConnectedOAuthProvider::Slack {
+            if slack_token_needs_refresh(&Some(decrypted.expires_at)) {
+                match self.refresh_slack_workspace_token(decrypted.id).await {
+                    Ok(refreshed) => return Ok(refreshed),
+                    Err(err) => {
+                        tracing::warn!(
+                            connection_id = %decrypted.id,
+                            error = %err,
+                            "Slack workspace token refresh failed"
+                        );
+                    }
+                }
+            }
             return Ok(decrypted);
         }
         let refresh_deadline = OffsetDateTime::now_utc() + Duration::seconds(60);
@@ -4094,183 +4119,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ensure_valid_workspace_token_skips_slack_refresh() {
-        let workspace_id = Uuid::new_v4();
-        let connection_id = Uuid::new_v4();
-        let user_id = Uuid::new_v4();
-        let key = Arc::new(vec![15u8; 32]);
-        let expired_at = OffsetDateTime::now_utc() - Duration::minutes(5);
-        let encrypted_access = encrypt_secret(&key, "slack-old-access").unwrap();
-        let encrypted_refresh = encrypt_secret(&key, "slack-old-refresh").unwrap();
-        let token_id = Uuid::new_v4();
-
-        let workspace_repo = Arc::new(InMemoryWorkspaceRepo::new());
-        {
-            let mut guard = workspace_repo.connection.lock().unwrap();
-            *guard = Some(WorkspaceConnection {
-                id: connection_id,
-                connection_id: Some(token_id),
-                workspace_id,
-                created_by: user_id,
-                owner_user_id: user_id,
-                user_oauth_token_id: Some(token_id),
-                provider: ConnectedOAuthProvider::Slack,
-                access_token: encrypted_access,
-                refresh_token: encrypted_refresh,
-                expires_at: expired_at,
-                account_email: "slack@example.com".into(),
-                created_at: OffsetDateTime::now_utc(),
-                updated_at: OffsetDateTime::now_utc(),
-                metadata: serde_json::json!({}),
-                slack_team_id: Some("T123".into()),
-                bot_user_id: None,
-                incoming_webhook_url: None,
-            });
-        }
-
-        let user_repo = Arc::new(InMemoryUserRepo {
-            token: Mutex::new(None),
-            shared_flag: Mutex::new(false),
-        });
-
-        let refresher = RecordingTokenRefresher::without_delay(AuthorizationTokens {
-            access_token: "slack-new-access".into(),
-            refresh_token: "slack-new-refresh".into(),
-            expires_at: OffsetDateTime::now_utc() + Duration::hours(4),
-            account_email: "slack@example.com".into(),
-            provider_user_id: Some("U123".into()),
-            notion: None,
-            slack: Some(
-                crate::services::oauth::account_service::SlackOAuthMetadata {
-                    team_id: Some("T123".into()),
-                    bot_user_id: Some("B456".into()),
-                    incoming_webhook_url: None,
-                },
-            ),
-        });
-        let service = WorkspaceOAuthService::new(
-            user_repo,
-            noop_membership_repo(),
-            workspace_repo.clone(),
-            Arc::new(refresher.clone()) as Arc<dyn WorkspaceTokenRefresher>,
-            key.clone(),
-        );
-
-        let connection = service
-            .ensure_valid_workspace_token(connection_id)
-            .await
-            .expect("slack token load succeeds");
-
-        assert_eq!(connection.access_token, "slack-old-access");
-        assert_eq!(connection.refresh_token, "slack-old-refresh");
-        assert_eq!(connection.expires_at, expired_at);
-
-        assert!(refresher.calls().is_empty());
-        assert_eq!(*workspace_repo.update_calls.lock().unwrap(), 0);
-    }
-
-    #[tokio::test]
-    async fn ensure_valid_workspace_token_skips_slack_refresh_without_mutating_personal_token() {
-        let workspace_id = Uuid::new_v4();
-        let connection_id = Uuid::new_v4();
-        let user_id = Uuid::new_v4();
-        let key = Arc::new(vec![31u8; 32]);
-        let expired_at = OffsetDateTime::now_utc() - Duration::minutes(5);
-        let encrypted_access = encrypt_secret(&key, "workspace-old-access").unwrap();
-        let encrypted_refresh = encrypt_secret(&key, "workspace-old-refresh").unwrap();
-        let token_id = Uuid::new_v4();
-
-        let workspace_repo = Arc::new(InMemoryWorkspaceRepo::new());
-        {
-            let mut guard = workspace_repo.connection.lock().unwrap();
-            *guard = Some(WorkspaceConnection {
-                id: connection_id,
-                connection_id: Some(token_id),
-                workspace_id,
-                created_by: user_id,
-                owner_user_id: user_id,
-                user_oauth_token_id: Some(token_id),
-                provider: ConnectedOAuthProvider::Slack,
-                access_token: encrypted_access,
-                refresh_token: encrypted_refresh,
-                expires_at: expired_at,
-                account_email: "slack@example.com".into(),
-                created_at: OffsetDateTime::now_utc(),
-                updated_at: OffsetDateTime::now_utc(),
-                metadata: serde_json::json!({}),
-                slack_team_id: Some("T123".into()),
-                bot_user_id: None,
-                incoming_webhook_url: None,
-            });
-        }
-
-        let personal_access = encrypt_secret(&key, "personal-access").unwrap();
-        let personal_refresh = encrypt_secret(&key, "personal-refresh").unwrap();
-        let personal_expires_at = OffsetDateTime::now_utc() + Duration::hours(2);
-        let user_repo = Arc::new(InMemoryUserRepo {
-            token: Mutex::new(Some(UserOAuthToken {
-                id: Uuid::new_v4(),
-                user_id,
-                workspace_id: None,
-                provider: ConnectedOAuthProvider::Slack,
-                access_token: personal_access.clone(),
-                refresh_token: personal_refresh.clone(),
-                expires_at: personal_expires_at,
-                account_email: "personal@example.com".into(),
-                metadata: serde_json::json!({}),
-                is_shared: true,
-                created_at: OffsetDateTime::now_utc(),
-                updated_at: OffsetDateTime::now_utc(),
-            })),
-            shared_flag: Mutex::new(true),
-        });
-
-        let refresher = RecordingTokenRefresher::without_delay(AuthorizationTokens {
-            access_token: "workspace-new-access".into(),
-            refresh_token: "workspace-new-refresh".into(),
-            expires_at: OffsetDateTime::now_utc() + Duration::hours(4),
-            account_email: "slack@example.com".into(),
-            provider_user_id: Some("U123".into()),
-            notion: None,
-            slack: Some(
-                crate::services::oauth::account_service::SlackOAuthMetadata {
-                    team_id: Some("T123".into()),
-                    bot_user_id: Some("B456".into()),
-                    incoming_webhook_url: None,
-                },
-            ),
-        });
-        let service = WorkspaceOAuthService::new(
-            user_repo.clone(),
-            noop_membership_repo(),
-            workspace_repo.clone(),
-            Arc::new(refresher.clone()) as Arc<dyn WorkspaceTokenRefresher>,
-            key.clone(),
-        );
-
-        let connection = service
-            .ensure_valid_workspace_token(connection_id)
-            .await
-            .expect("workspace refresh succeeds");
-
-        assert_eq!(connection.access_token, "workspace-old-access");
-        assert_eq!(connection.refresh_token, "workspace-old-refresh");
-        assert_eq!(connection.expires_at, expired_at);
-
-        let personal = user_repo
-            .token
-            .lock()
-            .unwrap()
-            .clone()
-            .expect("personal token should remain");
-        assert_eq!(personal.access_token, personal_access);
-        assert_eq!(personal.refresh_token, personal_refresh);
-        assert_eq!(personal.expires_at, personal_expires_at);
-        assert!(*user_repo.shared_flag.lock().unwrap());
-        assert!(refresher.calls().is_empty());
-    }
-
-    #[tokio::test]
     async fn ensure_valid_workspace_token_rejects_personal_slack_token_id() {
         let user_id = Uuid::new_v4();
         let token_id = Uuid::new_v4();
@@ -4492,81 +4340,6 @@ mod tests {
 
         assert!(workspace_repo.connection.lock().unwrap().is_none());
         assert!(!*user_repo.shared_flag.lock().unwrap());
-    }
-
-    #[tokio::test]
-    async fn ensure_valid_workspace_token_skips_slack_revocation_checks() {
-        let workspace_id = Uuid::new_v4();
-        let connection_id = Uuid::new_v4();
-        let user_id = Uuid::new_v4();
-        let key = Arc::new(vec![29u8; 32]);
-        let expired_at = OffsetDateTime::now_utc() - Duration::minutes(2);
-        let token_id = Uuid::new_v4();
-
-        let encrypted_access = encrypt_secret(&key, "revoked-slack-access").unwrap();
-        let encrypted_refresh = encrypt_secret(&key, "revoked-slack-refresh").unwrap();
-
-        let workspace_repo = Arc::new(InMemoryWorkspaceRepo::new());
-        {
-            let mut guard = workspace_repo.connection.lock().unwrap();
-            *guard = Some(WorkspaceConnection {
-                id: connection_id,
-                connection_id: Some(token_id),
-                workspace_id,
-                created_by: user_id,
-                owner_user_id: user_id,
-                user_oauth_token_id: Some(token_id),
-                provider: ConnectedOAuthProvider::Slack,
-                access_token: encrypted_access,
-                refresh_token: encrypted_refresh,
-                expires_at: expired_at,
-                account_email: "slack@example.com".into(),
-                created_at: OffsetDateTime::now_utc(),
-                updated_at: OffsetDateTime::now_utc(),
-                metadata: serde_json::json!({}),
-                slack_team_id: Some("T123".into()),
-                bot_user_id: None,
-                incoming_webhook_url: None,
-            });
-        }
-
-        let user_repo = Arc::new(InMemoryUserRepo {
-            token: Mutex::new(Some(UserOAuthToken {
-                id: token_id,
-                user_id,
-                workspace_id: None,
-                provider: ConnectedOAuthProvider::Slack,
-                access_token: String::new(),
-                refresh_token: String::new(),
-                expires_at: OffsetDateTime::now_utc(),
-                account_email: "slack@example.com".into(),
-                metadata: serde_json::json!({}),
-                is_shared: true,
-                created_at: OffsetDateTime::now_utc(),
-                updated_at: OffsetDateTime::now_utc(),
-            })),
-            shared_flag: Mutex::new(true),
-        });
-
-        let service = WorkspaceOAuthService::new(
-            user_repo.clone(),
-            noop_membership_repo(),
-            workspace_repo.clone(),
-            Arc::new(RevokingTokenRefresher) as Arc<dyn WorkspaceTokenRefresher>,
-            key,
-        );
-
-        let connection = service
-            .ensure_valid_workspace_token(connection_id)
-            .await
-            .expect("slack token load succeeds");
-
-        assert_eq!(connection.access_token, "revoked-slack-access");
-        assert_eq!(connection.refresh_token, "revoked-slack-refresh");
-        assert_eq!(connection.expires_at, expired_at);
-
-        assert!(workspace_repo.connection.lock().unwrap().is_some());
-        assert!(*user_repo.shared_flag.lock().unwrap());
     }
 
     #[tokio::test]
