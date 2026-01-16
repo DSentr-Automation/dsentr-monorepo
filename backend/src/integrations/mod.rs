@@ -97,8 +97,8 @@ pub fn build_integration_registry() -> Result<IntegrationRegistry, IntegrationRe
         IntegrationManifest {
             integration_id: "bitly".to_string(),
             auth_type: IntegrationAuthType::OAuth2,
-            token_scope: TokenScope::Personal,
-            ownership_model: OwnershipModel::PersonalOnly,
+            token_scope: TokenScope::PersonalAndWorkspace,
+            ownership_model: OwnershipModel::Hybrid,
             provider_constraints: ProviderConstraints {
                 workspace_first: false,
                 single_install_per_workspace: false,
