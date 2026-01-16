@@ -49,6 +49,7 @@ export interface IntegrationManifest {
   }
   oauthMetadata?: {
     scopes: string[]
+    promotable?: boolean
   }
 }
 
@@ -557,7 +558,13 @@ const normalizeManifestPayloads = (
         docsUrl: normalizeText(uiMetadata.docsUrl ?? uiMetadata.docs_url)
       },
       oauthMetadata: oauthMetadata
-        ? { scopes: normalizeScopes(oauthMetadata.scopes) }
+        ? {
+            scopes: normalizeScopes(oauthMetadata.scopes),
+            promotable:
+              typeof (oauthMetadata as any).promotable === 'boolean'
+                ? (oauthMetadata as any).promotable
+                : undefined
+          }
         : undefined
     }
     manifests.push(manifest)

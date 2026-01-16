@@ -1185,10 +1185,13 @@ export default function IntegrationsTab({
                               promoting ||
                               !hasValidId
                             const requiresReconnect = entry.requiresReconnect
+                            const isPromotable =
+                              manifest.oauthMetadata?.promotable !== false
                             const canShowPromote =
                               canWorkspace &&
                               !workspaceFirst &&
                               canPromote &&
+                              isPromotable &&
                               !isShared &&
                               hasValidConnectionId
                             return (
