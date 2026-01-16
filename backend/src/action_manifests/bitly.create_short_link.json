@@ -13,7 +13,7 @@
       "label": "Bitly account",
       "type": "oauth_connection",
       "provider": "bitly",
-      "scope": "personal_and_workspace",
+      "connection_scopes": ["personal", "workspace"],
       "required": true
     },
     {

@@ -50,9 +50,13 @@
             "type": "string",
             "minLength": 1
           },
-          "scope": {
-            "type": "string",
-            "enum": ["personal", "workspace", "personal_and_workspace"]
+          "connection_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["personal", "workspace"]
+            },
+            "minItems": 1
           }
         },
         "additionalProperties": false,
