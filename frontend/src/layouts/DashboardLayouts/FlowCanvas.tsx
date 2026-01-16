@@ -1305,6 +1305,7 @@ function FlyoutActionFields({
     return (
       <div className="space-y-3">
         {allInputs.map((input) => {
+          console.log('[node-input]', input)
           // OAuth connection input handling
           if (input.type === 'oauth_connection') {
             const connectionValue = controller.params?.connectionId
