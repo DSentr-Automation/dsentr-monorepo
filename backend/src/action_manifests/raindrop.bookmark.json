@@ -1,6 +1,7 @@
 {
   "action_id": "raindrop.bookmark",
   "executor": "http",
+
   "ui": {
     "label": "Raindrop",
     "description": "Create, update, or delete a bookmark in Raindrop.io.",
@@ -30,41 +31,60 @@
       "name": "bookmark_id",
       "label": "Bookmark ID",
       "type": "string",
-      "required": false
+      "required": false,
+      "visible_when": {
+        "operation": ["update", "delete"]
+      }
     },
 
     {
       "name": "url",
       "label": "URL",
       "type": "string",
-      "required": false
+      "required": false,
+      "visible_when": {
+        "operation": ["create", "update"]
+      }
     },
 
     {
       "name": "title",
       "label": "Title",
       "type": "string",
-      "required": false
+      "required": false,
+      "visible_when": {
+        "operation": ["create", "update"]
+      }
     },
 
     {
       "name": "tags",
       "label": "Tags (comma separated)",
       "type": "string",
-      "required": false
+      "required": false,
+      "visible_when": {
+        "operation": ["create", "update"]
+      }
     },
 
     {
       "name": "excerpt",
       "label": "Note",
       "type": "string",
-      "required": false
+      "required": false,
+      "visible_when": {
+        "operation": ["create", "update"]
+      }
     }
   ],
 
   "http": {
-    "method": "{{params._method}}",
-    "url": "{{params._url}}",
+    "method": "{{params.operation == 'delete' ? 'DELETE' : (params.operation == 'update' ? 'PUT' : 'POST')}}",
+
+    "url": "{{params.operation == 'create'
+      ? 'https://api.raindrop.io/rest/v1/raindrop'
+      : 'https://api.raindrop.io/rest/v1/raindrop/' + params.bookmark_id}}",
+
     "headers": [
       {
         "key": "Authorization",
@@ -75,9 +95,20 @@
         "value": "application/json"
       }
     ],
+
     "queryParams": [],
+
     "bodyType": "json",
-    "body": "{{params._body}}",
+
+    "body": "{{params.operation == 'delete'
+      ? null
+      : {
+          \"link\": \"{{params.url}}\",
+          \"title\": \"{{params.title}}\",
+          \"tags\": \"{{params.tags}}\",
+          \"excerpt\": \"{{params.excerpt}}\"
+        }}}",
+
     "formBody": []
   },
 
