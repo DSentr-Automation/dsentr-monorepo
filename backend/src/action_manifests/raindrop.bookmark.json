@@ -31,50 +31,35 @@
       "name": "bookmark_id",
       "label": "Bookmark ID",
       "type": "string",
-      "required": false,
-      "visible_when": {
-        "operation": ["update", "delete"]
-      }
+      "required": false
     },
 
     {
       "name": "url",
       "label": "URL",
       "type": "string",
-      "required": false,
-      "visible_when": {
-        "operation": ["create", "update"]
-      }
+      "required": false
     },
 
     {
       "name": "title",
       "label": "Title",
       "type": "string",
-      "required": false,
-      "visible_when": {
-        "operation": ["create", "update"]
-      }
+      "required": false
     },
 
     {
       "name": "tags",
       "label": "Tags (comma separated)",
       "type": "string",
-      "required": false,
-      "visible_when": {
-        "operation": ["create", "update"]
-      }
+      "required": false
     },
 
     {
       "name": "excerpt",
       "label": "Note",
       "type": "string",
-      "required": false,
-      "visible_when": {
-        "operation": ["create", "update"]
-      }
+      "required": false
     }
   ],
 
