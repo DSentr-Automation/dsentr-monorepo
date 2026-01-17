@@ -391,6 +391,7 @@ mod tests {
                 required: true,
                 provider: Some("bitly".to_string()),
                 connection_scopes: Some(vec!["personal".to_string(), "workspace".to_string()]),
+                options: None,
             }],
             http: HttpManifest {
                 method: "GET".to_string(),
@@ -426,6 +427,7 @@ mod tests {
                 required: true,
                 provider: None,
                 connection_scopes: Some(vec!["personal".to_string()]),
+                options: None,
             }],
             http: HttpManifest {
                 method: "GET".to_string(),
@@ -462,6 +464,7 @@ mod tests {
                 required: true,
                 provider: Some("".to_string()),
                 connection_scopes: Some(vec!["personal".to_string()]),
+                options: None,
             }],
             http: HttpManifest {
                 method: "GET".to_string(),
@@ -499,6 +502,7 @@ mod tests {
                 required: true,
                 provider: None,
                 connection_scopes: None,
+                options: None,
             }],
             http: HttpManifest {
                 method: "GET".to_string(),
