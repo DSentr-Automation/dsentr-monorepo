@@ -83,12 +83,7 @@
 
     "bodyType": "json",
 
-    "body": {
-      "link": "{{params.url}}",
-      "title": "{{params.title}}",
-      "tags": "{{params.tags}}",
-      "excerpt": "{{params.excerpt}}"
-    },
+    "body": "{\"link\":\"{{params.url}}\",\"title\":\"{{params.title}}\",\"tags\":\"{{params.tags}}\",\"excerpt\":\"{{params.excerpt}}\"}",
 
     "formBody": []
   },
