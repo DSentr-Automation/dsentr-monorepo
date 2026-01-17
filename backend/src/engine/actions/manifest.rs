@@ -312,10 +312,16 @@ fn validate_http(http: &HttpManifest) -> Result<(), String> {
     if http.method.trim().is_empty() {
         return Err("http.method is required".to_string());
     }
-    let method = http.method.trim().to_ascii_uppercase();
-    match method.as_str() {
-        "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" => {}
-        other => return Err(format!("http.method `{}` is not supported", other)),
+    let raw_method = http.method.trim();
+
+    let is_templated = raw_method.starts_with("{{") && raw_method.ends_with("}}");
+
+    if !is_templated {
+        let method = raw_method.to_ascii_uppercase();
+        match method.as_str() {
+            "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" => {}
+            other => return Err(format!("http.method `{}` is not supported", other)),
+        }
     }
 
     if http.url.trim().is_empty() {
