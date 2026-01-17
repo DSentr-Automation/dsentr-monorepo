@@ -113,6 +113,23 @@ pub fn build_integration_registry() -> Result<IntegrationRegistry, IntegrationRe
                 scopes: vec!["bitly".to_string()],
             }),
         },
+        IntegrationManifest {
+            integration_id: "raindrop".to_string(),
+            auth_type: IntegrationAuthType::OAuth2,
+            token_scope: TokenScope::PersonalAndWorkspace,
+            ownership_model: OwnershipModel::Hybrid,
+            provider_constraints: ProviderConstraints {
+                workspace_first: false,
+                single_install_per_workspace: false,
+            },
+            ui_metadata: UiMetadata {
+                display_name: "Raindrop".to_string(),
+                description: "Manage bookmarks with Raindrop.io.".to_string(),
+                icon_key: Some("raindrop".to_string()),
+                docs_url: None,
+            },
+            oauth_metadata: Some(OAuthMetadata { scopes: Vec::new() }),
+        },
     ];
 
     IntegrationRegistry::new(manifests)
