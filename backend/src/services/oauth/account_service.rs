@@ -1687,16 +1687,21 @@ impl OAuthAccountService {
             #[serde(default)]
             refresh_token: Option<String>,
             expires_in: Option<i64>,
-            user: Option<RaindropUser>,
+        }
+
+        #[derive(Deserialize)]
+        struct UserResponse {
+            user: RaindropUser,
         }
 
         #[derive(Deserialize)]
         struct RaindropUser {
             email: Option<String>,
+            #[serde(rename = "_id")]
             id: Option<String>,
         }
 
-        let response: TokenResponse = self
+        let token: TokenResponse = self
             .client
             .post("https://raindrop.io/oauth/access_token")
             .header("Accept", "application/json")
@@ -1711,27 +1716,42 @@ impl OAuthAccountService {
             .await?
             .error_for_status()?
             .json()
-            .await?;
+            .await
+            .map_err(|err| OAuthAccountError::InvalidResponse(err.to_string()))?;
 
-        let refresh_token = response
+        let refresh_token = token
             .refresh_token
             .ok_or(OAuthAccountError::MissingRefreshToken)?;
-        let expires_in = response.expires_in.ok_or_else(|| {
+
+        let expires_in = token.expires_in.ok_or_else(|| {
             OAuthAccountError::InvalidResponse("Raindrop response missing expires_in".into())
         })?;
+
         let expires_at = OffsetDateTime::now_utc() + Duration::seconds(expires_in);
 
-        let user = response.user.ok_or_else(|| {
-            OAuthAccountError::InvalidResponse("Raindrop response missing user info".into())
+        let user_resp: UserResponse = self
+            .client
+            .get("https://api.raindrop.io/rest/v1/user")
+            .bearer_auth(&token.access_token)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await
+            .map_err(|err| OAuthAccountError::InvalidResponse(err.to_string()))?;
+
+        let account_email = user_resp.user.email.ok_or_else(|| {
+            OAuthAccountError::InvalidResponse("Raindrop user missing email".into())
         })?;
 
-        let account_email = user
-            .email
-            .ok_or_else(|| OAuthAccountError::InvalidResponse("Missing account email".into()))?;
-        let provider_user_id = user.id.as_deref().and_then(normalize_provider_user_id);
+        let provider_user_id = user_resp
+            .user
+            .id
+            .as_deref()
+            .and_then(normalize_provider_user_id);
 
         Ok(AuthorizationTokens {
-            access_token: response.access_token,
+            access_token: token.access_token,
             refresh_token,
             expires_at,
             account_email,
