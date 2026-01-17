@@ -144,6 +144,7 @@ pub(crate) async fn execute_http(
     use tracing::error;
 
     let params = node.data.get("params").cloned().unwrap_or(Value::Null);
+
     error!(
         "[HTTP EXECUTOR ENTRY] action={} node_id={}",
         node.data
@@ -159,18 +160,109 @@ pub(crate) async fn execute_http(
     );
 
     let manifest_http = node.data.get("http").cloned().unwrap_or(Value::Null);
+
     error!(
         "[HTTP EXECUTOR URL CHECK] params.url={:?} manifest_http.url={:?}",
         params.get("url"),
         manifest_http.get("url")
     );
-    // ---- Resolve core fields (params override manifest) ----
+
+    // ---- Resolve URL (manifest only) ----
 
     let url_raw = manifest_http
         .get("url")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "HTTP url is required".to_string())?;
-    let url = templ_str(url_raw, context);
+
+    let url_rendered = templ_str(url_raw, context);
+
+    let parsed =
+        reqwest::Url::parse(&url_rendered).map_err(|e| format!("Invalid rendered URL: {}", e))?;
+
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("Only http/https schemes are allowed".to_string());
+    }
+
+    let host = parsed.host_str().unwrap_or("").to_lowercase();
+    let allowed: Vec<String> = allowed_hosts.to_vec();
+
+    // ---- SSRF / egress validation ----
+
+    if is_host_blocked(&host, disallowed_hosts) {
+        let msg = format!("Outbound HTTP blocked by denylist: {}", host);
+        let _ = state
+            .workflow_repo
+            .insert_egress_block_event(
+                run.user_id,
+                run.workflow_id,
+                run.id,
+                &node.id,
+                &url_rendered,
+                &host,
+                "denylist",
+                &msg,
+            )
+            .await;
+        return Err(msg);
+    }
+
+    if let Some(ip) = parsed.host_str().and_then(|h| h.parse::<IpAddr>().ok()) {
+        if is_prod && is_ip_blocked(&ip) {
+            let msg = "Outbound HTTP blocked by SSRF hardening".to_string();
+            let _ = state
+                .workflow_repo
+                .insert_egress_block_event(
+                    run.user_id,
+                    run.workflow_id,
+                    run.id,
+                    &node.id,
+                    &url_rendered,
+                    &host,
+                    "ssrf_hardening",
+                    &msg,
+                )
+                .await;
+            return Err(msg);
+        }
+    }
+
+    if default_deny {
+        if allowed.is_empty() || !is_host_allowed(&host, &allowed) {
+            let msg = format!("Outbound HTTP not allowed (default-deny): {}", host);
+            let _ = state
+                .workflow_repo
+                .insert_egress_block_event(
+                    run.user_id,
+                    run.workflow_id,
+                    run.id,
+                    &node.id,
+                    &url_rendered,
+                    &host,
+                    "default_deny",
+                    &msg,
+                )
+                .await;
+            return Err(msg);
+        }
+    } else if !allowed.is_empty() && !is_host_allowed(&host, &allowed) {
+        let msg = format!("Outbound HTTP not allowed: {}", host);
+        let _ = state
+            .workflow_repo
+            .insert_egress_block_event(
+                run.user_id,
+                run.workflow_id,
+                run.id,
+                &node.id,
+                &url_rendered,
+                &host,
+                "allowlist_miss",
+                &msg,
+            )
+            .await;
+        return Err(msg);
+    }
+
+    // ---- Resolve method / options ----
 
     let method = params
         .get("method")
@@ -206,115 +298,6 @@ pub(crate) async fn execute_http(
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as usize;
 
-    let allowed: Vec<String> = allowed_hosts.to_vec();
-
-    // ---- URL validation / SSRF hardening ----
-
-    let parsed = reqwest::Url::parse(&url).map_err(|e| e.to_string())?;
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Err("Only http/https schemes are allowed".to_string());
-    }
-
-    let host = parsed.host_str().unwrap_or("").to_lowercase();
-
-    if is_host_blocked(&host, disallowed_hosts) {
-        let msg = format!("Outbound HTTP blocked by denylist: {}", host);
-        let _ = state
-            .workflow_repo
-            .insert_egress_block_event(
-                run.user_id,
-                run.workflow_id,
-                run.id,
-                &node.id,
-                &url,
-                &host,
-                "denylist",
-                &msg,
-            )
-            .await;
-        return Err(json!({
-            "error": "egress_blocked",
-            "host": host,
-            "rule": "denylist",
-            "message": msg
-        })
-        .to_string());
-    }
-
-    if let Some(ip) = parsed.host_str().and_then(|h| h.parse::<IpAddr>().ok()) {
-        if is_prod && is_ip_blocked(&ip) {
-            let msg = "Outbound HTTP blocked by SSRF hardening".to_string();
-            let _ = state
-                .workflow_repo
-                .insert_egress_block_event(
-                    run.user_id,
-                    run.workflow_id,
-                    run.id,
-                    &node.id,
-                    &url,
-                    &host,
-                    "ssrf_hardening",
-                    &msg,
-                )
-                .await;
-            return Err(json!({
-                "error": "egress_blocked",
-                "host": host,
-                "rule": "ssrf_hardening",
-                "message": msg
-            })
-            .to_string());
-        }
-    }
-
-    if default_deny {
-        if allowed.is_empty() || !is_host_allowed(&host, &allowed) {
-            let msg = format!("Outbound HTTP not allowed (default-deny): {}", host);
-            let _ = state
-                .workflow_repo
-                .insert_egress_block_event(
-                    run.user_id,
-                    run.workflow_id,
-                    run.id,
-                    &node.id,
-                    &url,
-                    &host,
-                    "default_deny",
-                    &msg,
-                )
-                .await;
-            return Err(json!({
-                "error": "egress_blocked",
-                "host": host,
-                "rule": "default_deny",
-                "message": msg
-            })
-            .to_string());
-        }
-    } else if !allowed.is_empty() && !is_host_allowed(&host, &allowed) {
-        let msg = format!("Outbound HTTP not allowed: {}", host);
-        let _ = state
-            .workflow_repo
-            .insert_egress_block_event(
-                run.user_id,
-                run.workflow_id,
-                run.id,
-                &node.id,
-                &url,
-                &host,
-                "allowlist_miss",
-                &msg,
-            )
-            .await;
-        return Err(json!({
-            "error": "egress_blocked",
-            "host": host,
-            "rule": "allowlist_miss",
-            "message": msg
-        })
-        .to_string());
-    }
-
     // ---- Redirect policy ----
 
     let redirect_policy = if follow {
@@ -328,14 +311,17 @@ pub(crate) async fn execute_http(
                 return attempt.stop();
             }
 
-            let next = attempt.url();
-            let host = next.host_str().unwrap_or("").to_lowercase();
+            let host = attempt.url().host_str().unwrap_or("").to_lowercase();
 
             if is_host_blocked(&host, &disallowed_clone) {
                 return attempt.stop();
             }
 
-            if let Some(ip) = next.host_str().and_then(|h| h.parse::<IpAddr>().ok()) {
+            if let Some(ip) = attempt
+                .url()
+                .host_str()
+                .and_then(|h| h.parse::<IpAddr>().ok())
+            {
                 if is_prod_local && is_ip_blocked(&ip) {
                     return attempt.stop();
                 }
@@ -389,29 +375,23 @@ pub(crate) async fn execute_http(
 
     // ---- Query params ----
 
-    let mut url_parsed = url.to_string();
+    let mut url_parsed = parsed.clone();
     let query_source = params
         .get("queryParams")
         .and_then(|v| v.as_array())
         .or_else(|| manifest_http.get("queryParams").and_then(|v| v.as_array()));
 
     if let Some(qs) = query_source {
-        let mut first = !url.contains('?');
-        for qp in qs {
+        let mut qp = url_parsed.query_pairs_mut();
+        for item in qs {
             if let (Some(k), Some(v)) = (
-                qp.get("key").and_then(|v| v.as_str()),
-                qp.get("value").and_then(|v| v.as_str()),
+                item.get("key").and_then(|v| v.as_str()),
+                item.get("value").and_then(|v| v.as_str()),
             ) {
-                let v_resolved = templ_str(v, context);
-                url_parsed.push(if first { '?' } else { '&' });
-                first = false;
-                url_parsed.push_str(&format!(
-                    "{}={}",
-                    urlencoding::encode(k),
-                    urlencoding::encode(&v_resolved)
-                ));
+                qp.append_pair(k, &templ_str(v, context));
             }
         }
+        drop(qp);
     }
 
     // ---- Request loop ----
@@ -421,12 +401,12 @@ pub(crate) async fn execute_http(
         attempt += 1;
 
         let mut req = match method {
-            "POST" => client.post(&url_parsed),
-            "PUT" => client.put(&url_parsed),
-            "PATCH" => client.patch(&url_parsed),
-            "DELETE" => client.delete(&url_parsed),
-            "HEAD" => client.head(&url_parsed),
-            _ => client.get(&url_parsed),
+            "POST" => client.post(url_parsed.clone()),
+            "PUT" => client.put(url_parsed.clone()),
+            "PATCH" => client.patch(url_parsed.clone()),
+            "DELETE" => client.delete(url_parsed.clone()),
+            "HEAD" => client.head(url_parsed.clone()),
+            _ => client.get(url_parsed.clone()),
         }
         .headers(headers.clone());
 
@@ -492,43 +472,20 @@ pub(crate) async fn execute_http(
             Ok(resp) => {
                 let status = resp.status().as_u16();
                 let headers = resp.headers().clone();
-
-                let mut header_map = serde_json::Map::new();
-                for (k, v) in headers.iter() {
-                    if let Ok(s) = v.to_str() {
-                        header_map.insert(k.as_str().to_string(), Value::String(s.to_string()));
-                    }
-                }
-
-                let content_type = headers
-                    .get("content-type")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("")
-                    .to_string();
-
                 let text = resp.text().await.unwrap_or_default();
 
-                let body_value = if content_type.contains("application/json") {
+                let body = if headers
+                    .get("content-type")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|v| v.contains("application/json"))
+                    .unwrap_or(false)
+                {
                     serde_json::from_str::<Value>(&text).unwrap_or(Value::String(text))
                 } else {
                     Value::String(text)
                 };
 
-                let outputs_raw = json!({
-                    "status": status,
-                    "headers": header_map,
-                    "body": body_value,
-                });
-
-                let secrets_env = std::env::var("MASK_SECRETS").ok().unwrap_or_default();
-                let secrets: Vec<String> = secrets_env
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
-
-                let outputs = mask_json(&outputs_raw, &secrets);
-                return Ok((outputs, None));
+                return Ok((json!({ "status": status, "body": body }), None));
             }
             Err(_) if attempt <= retries + 1 => {
                 tokio::time::sleep(Duration::from_millis(250 * attempt as u64)).await;
