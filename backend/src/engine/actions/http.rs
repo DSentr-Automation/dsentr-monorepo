@@ -26,29 +26,6 @@ impl ActionValidator for HttpValidator {
     }
 }
 
-fn mask_json(value: &Value, secrets: &[String]) -> Value {
-    match value {
-        Value::String(s) => {
-            let mut out = s.clone();
-            for sec in secrets {
-                if !sec.is_empty() && sec.len() >= 4 {
-                    out = out.replace(sec, "[REDACTED]");
-                }
-            }
-            Value::String(out)
-        }
-        Value::Array(arr) => Value::Array(arr.iter().map(|v| mask_json(v, secrets)).collect()),
-        Value::Object(map) => {
-            let mut out = serde_json::Map::new();
-            for (k, v) in map.iter() {
-                out.insert(k.clone(), mask_json(v, secrets));
-            }
-            Value::Object(out)
-        }
-        other => other.clone(),
-    }
-}
-
 fn is_ip_blocked(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
