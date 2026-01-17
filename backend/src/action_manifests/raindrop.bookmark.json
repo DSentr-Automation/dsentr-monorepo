@@ -2,7 +2,7 @@
   "action_id": "raindrop.bookmark",
   "executor": "http",
   "ui": {
-    "label": "Bookmark",
+    "label": "Raindrop",
     "description": "Create, update, or delete a bookmark in Raindrop.io.",
     "category": "Bookmarks",
     "icon": "raindrop"

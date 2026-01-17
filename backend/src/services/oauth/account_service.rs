@@ -1676,7 +1676,6 @@ impl OAuthAccountService {
             notion: None,
         })
     }
-
     async fn exchange_raindrop_code(
         &self,
         code: &str,
@@ -1691,6 +1690,7 @@ impl OAuthAccountService {
 
         #[derive(Deserialize)]
         struct UserResponse {
+            result: bool,
             user: RaindropUser,
         }
 
@@ -1698,7 +1698,7 @@ impl OAuthAccountService {
         struct RaindropUser {
             email: Option<String>,
             #[serde(rename = "_id")]
-            id: Option<String>,
+            id: Option<u64>,
         }
 
         let token: TokenResponse = self
@@ -1740,6 +1740,12 @@ impl OAuthAccountService {
             .await
             .map_err(|err| OAuthAccountError::InvalidResponse(err.to_string()))?;
 
+        if !user_resp.result {
+            return Err(OAuthAccountError::InvalidResponse(
+                "Raindrop user endpoint returned result=false".into(),
+            ));
+        }
+
         let account_email = user_resp.user.email.ok_or_else(|| {
             OAuthAccountError::InvalidResponse("Raindrop user missing email".into())
         })?;
@@ -1747,6 +1753,7 @@ impl OAuthAccountService {
         let provider_user_id = user_resp
             .user
             .id
+            .map(|id| id.to_string())
             .as_deref()
             .and_then(normalize_provider_user_id);
 

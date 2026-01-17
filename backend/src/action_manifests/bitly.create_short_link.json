@@ -2,9 +2,9 @@
   "action_id": "bitly.create_short_link",
   "executor": "http",
   "ui": {
-    "label": "Create short link",
+    "label": "Bitly",
     "description": "Shorten a URL with Bitly.",
-    "category": "Bitly",
+    "category": "URL",
     "icon": "bitly"
   },
   "inputs": [
