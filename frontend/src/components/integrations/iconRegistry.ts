@@ -7,6 +7,7 @@ import GoogleIcon from '@/assets/svg-components/third-party/GoogleIcon'
 import MicrosoftIcon from '@/assets/svg-components/third-party/MicrosoftIcon'
 import NotionIcon from '@/assets/svg-components/third-party/NotionIcon'
 import SlackIcon from '@/assets/svg-components/third-party/SlackIcon'
+import RaindropIcon from '@/assets/svg-components/third-party/RaindropIcon'
 
 /**
  * Central registry for integration icons.
@@ -22,7 +23,8 @@ export const INTEGRATION_ICONS: Record<
   google: GoogleIcon,
   microsoft: MicrosoftIcon,
   asana: AsanaIcon,
-  notion: NotionIcon
+  notion: NotionIcon,
+  raindrop: RaindropIcon
 }
 
 /**

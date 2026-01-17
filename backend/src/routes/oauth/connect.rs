@@ -15,7 +15,10 @@ use crate::models::workspace::WorkspaceRole;
 use crate::services::oauth::workspace_service::WorkspaceOAuthError;
 use crate::{
     integrations::manifest::IntegrationManifest,
-    routes::oauth::helpers::{BITLY_AUTH_URL, BITLY_INTEGRATION_ID, BITLY_STATE_COOKIE},
+    routes::oauth::helpers::{
+        BITLY_AUTH_URL, BITLY_INTEGRATION_ID, BITLY_STATE_COOKIE, RAINDROP_AUTH_URL,
+        RAINDROP_INTEGRATION_ID, RAINDROP_STATE_COOKIE,
+    },
 };
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
@@ -1180,6 +1183,7 @@ pub async fn bitly_connect_start(
 
     (jar, Redirect::to(url.as_str())).into_response()
 }
+
 pub async fn bitly_connect_callback(
     State(state): State<AppState>,
     AuthSession(claims): AuthSession,
@@ -1200,6 +1204,77 @@ pub async fn bitly_connect_callback(
         provider,
         integration_id,
         BITLY_STATE_COOKIE,
+    )
+    .await
+}
+
+pub async fn raindrop_connect_start(
+    State(state): State<AppState>,
+    AuthSession(claims): AuthSession,
+    Query(params): Query<ConnectQuery>,
+    jar: CookieJar,
+) -> Response {
+    let integration_id = RAINDROP_INTEGRATION_ID;
+
+    let (manifest, _provider) =
+        match resolve_oauth_integration(state.integration_registry.as_ref(), integration_id) {
+            Ok(result) => result,
+            Err(response) => return response,
+        };
+
+    let user_id = match Uuid::parse_str(&claims.id) {
+        Ok(user_id) => user_id,
+        Err(_) => {
+            return redirect_with_error(&state.config, integration_id, "Invalid user");
+        }
+    };
+
+    if let Err(response) = ensure_oauth_permissions(
+        &state,
+        user_id,
+        claims.plan.as_deref(),
+        params.workspace,
+        manifest,
+    )
+    .await
+    {
+        return response;
+    }
+
+    let state_token = generate_csrf_token();
+    let cookie = build_state_cookie(RAINDROP_STATE_COOKIE, &state_token);
+    let jar = jar.add(cookie);
+
+    let mut url = Url::parse(RAINDROP_AUTH_URL).expect("valid raindrop auth url");
+    url.query_pairs_mut()
+        .append_pair("client_id", &state.config.oauth.raindrop.client_id)
+        .append_pair("redirect_uri", &state.config.oauth.raindrop.redirect_uri)
+        .append_pair("response_type", "code")
+        .append_pair("state", &state_token);
+
+    (jar, Redirect::to(url.as_str())).into_response()
+}
+
+pub async fn raindrop_connect_callback(
+    State(state): State<AppState>,
+    AuthSession(claims): AuthSession,
+    jar: CookieJar,
+    Query(query): Query<CallbackQuery>,
+) -> Response {
+    let integration_id = RAINDROP_INTEGRATION_ID;
+    let (_manifest, provider) =
+        match resolve_oauth_integration(state.integration_registry.as_ref(), integration_id) {
+            Ok(result) => result,
+            Err(response) => return response,
+        };
+    handle_callback(
+        state,
+        claims,
+        jar,
+        query,
+        provider,
+        integration_id,
+        RAINDROP_STATE_COOKIE,
     )
     .await
 }

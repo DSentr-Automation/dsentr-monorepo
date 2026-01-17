@@ -865,6 +865,7 @@ impl WorkspaceOAuthService {
             ConnectedOAuthProvider::Asana => 3,
             ConnectedOAuthProvider::Notion => 4,
             ConnectedOAuthProvider::Bitly => 5,
+            ConnectedOAuthProvider::Raindrop => 6,
         }
     }
 

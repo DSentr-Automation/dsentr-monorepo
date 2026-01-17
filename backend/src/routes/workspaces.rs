@@ -3730,6 +3730,11 @@ mod tests {
                     client_secret: "stub".into(),
                     redirect_uri: "http://localhost".into(),
                 },
+                raindrop: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
+                },
                 token_encryption_key: vec![0; 32],
             },
             api_secrets_encryption_key: vec![1; 32],

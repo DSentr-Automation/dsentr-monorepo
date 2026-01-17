@@ -4,11 +4,16 @@ import {
   getIntegrationIcon
 } from '@/components/integrations/iconRegistry'
 import BitlyIcon from '@/assets/svg-components/third-party/BitlyIcon'
+import RaindropIcon from '@/assets/svg-components/third-party/RaindropIcon'
 import SlackIcon from '@/assets/svg-components/third-party/SlackIcon'
 
 describe('Integration Icon Registry', () => {
   it('should export Bitly icon in the registry', () => {
     expect(INTEGRATION_ICONS.bitly).toBe(BitlyIcon)
+  })
+
+  it('should export Raindrop icon in the registry', () => {
+    expect(INTEGRATION_ICONS.raindrop).toBe(RaindropIcon)
   })
 
   it('should export Slack icon in the registry', () => {
@@ -20,9 +25,19 @@ describe('Integration Icon Registry', () => {
     expect(IconComponent).toBe(BitlyIcon)
   })
 
+  it('should resolve existing raindrop icon by key', () => {
+    const IconComponent = getIntegrationIcon('raindrop')
+    expect(IconComponent).toBe(RaindropIcon)
+  })
+
   it('should resolve existing icon with case normalization', () => {
     const IconComponent = getIntegrationIcon('BITLY')
     expect(IconComponent).toBe(BitlyIcon)
+  })
+
+  it('should resolve existing raindrop icon with case normalization', () => {
+    const IconComponent = getIntegrationIcon('RAINDROP')
+    expect(IconComponent).toBe(RaindropIcon)
   })
 
   it('should resolve existing icon with whitespace trimming', () => {

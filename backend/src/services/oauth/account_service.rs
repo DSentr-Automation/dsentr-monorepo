@@ -159,6 +159,7 @@ pub struct OAuthAccountService {
     asana: OAuthProviderConfig,
     notion: OAuthProviderConfig,
     bitly: OAuthProviderConfig,
+    raindrop: OAuthProviderConfig,
     #[cfg(test)]
     refresh_override: Option<Arc<RefreshOverride>>,
     #[cfg(test)]
@@ -186,6 +187,7 @@ impl OAuthAccountService {
             asana: settings.asana.clone(),
             notion: settings.notion.clone(),
             bitly: settings.bitly.clone(),
+            raindrop: settings.raindrop.clone(),
             #[cfg(test)]
             refresh_override: None,
             #[cfg(test)]
@@ -357,6 +359,10 @@ impl OAuthAccountService {
 
     pub fn bitly_scopes(&self) -> &'static str {
         "bitly.read bitly.write"
+    }
+
+    pub fn raindrop_scopes(&self) -> &'static str {
+        "read write"
     }
 
     pub async fn save_authorization(
@@ -1029,6 +1035,7 @@ impl OAuthAccountService {
             ConnectedOAuthProvider::Asana => self.exchange_asana_code(code).await,
             ConnectedOAuthProvider::Notion => self.exchange_notion_code(code).await,
             ConnectedOAuthProvider::Bitly => self.exchange_bitly_code(code).await,
+            ConnectedOAuthProvider::Raindrop => self.exchange_raindrop_code(code).await,
         }
     }
 
@@ -1670,6 +1677,70 @@ impl OAuthAccountService {
         })
     }
 
+    async fn exchange_raindrop_code(
+        &self,
+        code: &str,
+    ) -> Result<AuthorizationTokens, OAuthAccountError> {
+        #[derive(Deserialize)]
+        struct TokenResponse {
+            access_token: String,
+            #[serde(default)]
+            refresh_token: Option<String>,
+            expires_in: Option<i64>,
+            user: Option<RaindropUser>,
+        }
+
+        #[derive(Deserialize)]
+        struct RaindropUser {
+            email: Option<String>,
+            id: Option<String>,
+        }
+
+        let response: TokenResponse = self
+            .client
+            .post("https://raindrop.io/oauth/access_token")
+            .header("Accept", "application/json")
+            .json(&json!({
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": self.raindrop.redirect_uri,
+                "client_id": self.raindrop.client_id.as_str(),
+                "client_secret": self.raindrop.client_secret.as_str(),
+            }))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
+        let refresh_token = response
+            .refresh_token
+            .ok_or(OAuthAccountError::MissingRefreshToken)?;
+        let expires_in = response.expires_in.ok_or_else(|| {
+            OAuthAccountError::InvalidResponse("Raindrop response missing expires_in".into())
+        })?;
+        let expires_at = OffsetDateTime::now_utc() + Duration::seconds(expires_in);
+
+        let user = response.user.ok_or_else(|| {
+            OAuthAccountError::InvalidResponse("Raindrop response missing user info".into())
+        })?;
+
+        let account_email = user
+            .email
+            .ok_or_else(|| OAuthAccountError::InvalidResponse("Missing account email".into()))?;
+        let provider_user_id = user.id.as_deref().and_then(normalize_provider_user_id);
+
+        Ok(AuthorizationTokens {
+            access_token: response.access_token,
+            refresh_token,
+            expires_at,
+            account_email,
+            provider_user_id,
+            slack: None,
+            notion: None,
+        })
+    }
+
     pub async fn refresh_access_token(
         &self,
         provider: ConnectedOAuthProvider,
@@ -1688,6 +1759,7 @@ impl OAuthAccountService {
             ConnectedOAuthProvider::Bitly => Err(OAuthAccountError::RefreshNotSupported {
                 provider: ConnectedOAuthProvider::Bitly,
             }),
+            ConnectedOAuthProvider::Raindrop => self.refresh_raindrop_token(refresh_token).await,
         }
     }
 
@@ -2028,6 +2100,55 @@ impl OAuthAccountService {
         })
     }
 
+    async fn refresh_raindrop_token(
+        &self,
+        refresh_token: &str,
+    ) -> Result<AuthorizationTokens, OAuthAccountError> {
+        #[derive(Deserialize)]
+        struct TokenResponse {
+            access_token: String,
+            #[serde(default)]
+            refresh_token: Option<String>,
+            expires_in: Option<i64>,
+        }
+
+        let response = self
+            .client
+            .post("https://raindrop.io/oauth/access_token")
+            .form(&[
+                ("grant_type", "refresh_token"),
+                ("refresh_token", refresh_token),
+                ("client_id", self.raindrop.client_id.as_str()),
+                ("client_secret", self.raindrop.client_secret.as_str()),
+            ])
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let body: TokenResponse = response
+            .json()
+            .await
+            .map_err(|err| OAuthAccountError::InvalidResponse(err.to_string()))?;
+
+        let expires_in = body.expires_in.ok_or_else(|| {
+            OAuthAccountError::InvalidResponse("Raindrop refresh missing expires_in".into())
+        })?;
+        let expires_at = OffsetDateTime::now_utc() + Duration::seconds(expires_in);
+        let new_refresh = body
+            .refresh_token
+            .unwrap_or_else(|| refresh_token.to_string());
+
+        Ok(AuthorizationTokens {
+            access_token: body.access_token,
+            refresh_token: new_refresh,
+            expires_at,
+            account_email: String::new(),
+            provider_user_id: None,
+            slack: None,
+            notion: None,
+        })
+    }
+
     async fn refresh_notion_token(
         &self,
         _refresh_token: &str,
@@ -2191,6 +2312,7 @@ impl OAuthAccountService {
             }
             ConnectedOAuthProvider::Notion => Ok(()),
             ConnectedOAuthProvider::Bitly => Ok(()),
+            ConnectedOAuthProvider::Raindrop => Ok(()),
         }
     }
 
@@ -2598,6 +2720,11 @@ impl OAuthAccountService {
                 client_secret: "stub".into(),
                 redirect_uri: "http://localhost".into(),
             },
+            raindrop: OAuthProviderConfig {
+                client_id: "stub".into(),
+                client_secret: "stub".into(),
+                redirect_uri: "http://localhost".into(),
+            },
             token_encryption_key: vec![0u8; 32],
         };
         Arc::new(Self::new(
@@ -2798,6 +2925,9 @@ fn normalize_account_label(provider: ConnectedOAuthProvider, account_email: Stri
     match provider {
         ConnectedOAuthProvider::Bitly => {
             format!("{account_email} (Bitly account)")
+        }
+        ConnectedOAuthProvider::Raindrop => {
+            format!("{account_email} (Raindrop account)")
         }
         _ => account_email,
     }
@@ -3143,6 +3273,11 @@ mod tests {
                 client_secret: "stub".into(),
                 redirect_uri: "http://localhost".into(),
             },
+            raindrop: OAuthProviderConfig {
+                client_id: "stub".into(),
+                client_secret: "stub".into(),
+                redirect_uri: "http://localhost".into(),
+            },
             token_encryption_key: vec![0u8; 32],
         };
         let service = OAuthAccountService::new(repo, workspace_repo, key, client, &settings);
@@ -3215,6 +3350,11 @@ mod tests {
                 redirect_uri: "http://localhost/asana".into(),
             },
             bitly: OAuthProviderConfig {
+                client_id: "stub".into(),
+                client_secret: "stub".into(),
+                redirect_uri: "http://localhost".into(),
+            },
+            raindrop: OAuthProviderConfig {
                 client_id: "stub".into(),
                 client_secret: "stub".into(),
                 redirect_uri: "http://localhost".into(),
@@ -3295,6 +3435,11 @@ mod tests {
                 redirect_uri: "http://localhost/asana".into(),
             },
             bitly: OAuthProviderConfig {
+                client_id: "stub".into(),
+                client_secret: "stub".into(),
+                redirect_uri: "http://localhost".into(),
+            },
+            raindrop: OAuthProviderConfig {
                 client_id: "stub".into(),
                 client_secret: "stub".into(),
                 redirect_uri: "http://localhost".into(),
@@ -4036,6 +4181,11 @@ mod tests {
                     client_secret: "stub".into(),
                     redirect_uri: "http://localhost".into(),
                 },
+                raindrop: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
+                },
                 token_encryption_key: (*key).clone(),
             },
         );
@@ -4131,6 +4281,11 @@ mod tests {
                     client_secret: "stub".into(),
                     redirect_uri: "http://localhost".into(),
                 },
+                raindrop: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
+                },
                 token_encryption_key: vec![0u8; 32],
             },
         );
@@ -4198,6 +4353,11 @@ mod tests {
                     redirect_uri: "http://localhost/asana".into(),
                 },
                 bitly: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
+                },
+                raindrop: OAuthProviderConfig {
                     client_id: "stub".into(),
                     client_secret: "stub".into(),
                     redirect_uri: "http://localhost".into(),
@@ -4282,6 +4442,11 @@ mod tests {
                     redirect_uri: "http://localhost/asana".into(),
                 },
                 bitly: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
+                },
+                raindrop: OAuthProviderConfig {
                     client_id: "stub".into(),
                     client_secret: "stub".into(),
                     redirect_uri: "http://localhost".into(),
@@ -4381,6 +4546,11 @@ mod tests {
                     redirect_uri: "http://localhost/asana".into(),
                 },
                 bitly: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
+                },
+                raindrop: OAuthProviderConfig {
                     client_id: "stub".into(),
                     client_secret: "stub".into(),
                     redirect_uri: "http://localhost".into(),
@@ -4521,6 +4691,11 @@ mod tests {
                     redirect_uri: "http://localhost/asana".into(),
                 },
                 bitly: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
+                },
+                raindrop: OAuthProviderConfig {
                     client_id: "stub".into(),
                     client_secret: "stub".into(),
                     redirect_uri: "http://localhost".into(),
@@ -4672,6 +4847,11 @@ mod tests {
                     client_secret: "stub".into(),
                     redirect_uri: "http://localhost".into(),
                 },
+                raindrop: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
+                },
                 token_encryption_key: (*key).clone(),
             },
         )
@@ -4749,6 +4929,11 @@ mod tests {
                     redirect_uri: "http://localhost/asana".into(),
                 },
                 bitly: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
+                },
+                raindrop: OAuthProviderConfig {
                     client_id: "stub".into(),
                     client_secret: "stub".into(),
                     redirect_uri: "http://localhost".into(),
@@ -4843,6 +5028,11 @@ mod tests {
                     redirect_uri: "http://localhost/asana".into(),
                 },
                 bitly: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
+                },
+                raindrop: OAuthProviderConfig {
                     client_id: "stub".into(),
                     client_secret: "stub".into(),
                     redirect_uri: "http://localhost".into(),
@@ -4953,6 +5143,11 @@ mod tests {
                     client_secret: "stub".into(),
                     redirect_uri: "http://localhost".into(),
                 },
+                raindrop: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
+                },
                 token_encryption_key: (*key).clone(),
             },
         );
@@ -5059,6 +5254,11 @@ mod tests {
                     redirect_uri: "http://localhost/asana".into(),
                 },
                 bitly: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
+                },
+                raindrop: OAuthProviderConfig {
                     client_id: "stub".into(),
                     client_secret: "stub".into(),
                     redirect_uri: "http://localhost".into(),
@@ -5233,6 +5433,11 @@ mod tests {
                     client_secret: "stub".into(),
                     redirect_uri: "http://localhost".into(),
                 },
+                raindrop: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
+                },
                 token_encryption_key: (*key).clone(),
             },
         );
@@ -5307,6 +5512,11 @@ mod tests {
                     redirect_uri: "http://localhost/asana".into(),
                 },
                 bitly: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
+                },
+                raindrop: OAuthProviderConfig {
                     client_id: "stub".into(),
                     client_secret: "stub".into(),
                     redirect_uri: "http://localhost".into(),

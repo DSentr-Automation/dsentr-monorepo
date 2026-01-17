@@ -9,6 +9,7 @@ export type OAuthProvider =
   | 'asana'
   | 'notion'
   | 'bitly'
+  | 'raindrop'
 
 export type ConnectionScope = 'personal' | 'workspace'
 
