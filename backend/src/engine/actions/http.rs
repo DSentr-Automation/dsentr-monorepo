@@ -166,10 +166,9 @@ pub(crate) async fn execute_http(
     );
     // ---- Resolve core fields (params override manifest) ----
 
-    let url_raw = params
+    let url_raw = manifest_http
         .get("url")
         .and_then(|v| v.as_str())
-        .or_else(|| manifest_http.get("url").and_then(|v| v.as_str()))
         .ok_or_else(|| "HTTP url is required".to_string())?;
     let url = templ_str(url_raw, context);
 

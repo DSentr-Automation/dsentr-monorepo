@@ -60,3 +60,4 @@ itly coordinated.
 - Added an `OAUTH_REQUIRE_CONNECTION_ID` toggle so OAuth refresh/disconnect/revoke routes can require explicit `connection_id` inputs while still warning on implicit lookups by default.
 - Update github backend build to push to a docker dev repo
 - Added compile-time embedded action manifests so new action nodes can be added via JSON without new executor code.
+- Fixed HTTP egress validation to only check manifest-defined destinations (node.data.http.url) and ignore payload data (params.url), preventing false rejections when actions process URLs as data.
