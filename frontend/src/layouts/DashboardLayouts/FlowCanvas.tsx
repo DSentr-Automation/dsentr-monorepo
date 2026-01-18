@@ -1442,30 +1442,36 @@ function FlyoutActionFields({
     const operation = controller.params?.operation as string
     if (!operation) return
 
-    let executionParams: Record<string, string> = {}
+    const readParamString = (value: unknown) => {
+      if (typeof value === 'string') return value
+      if (value == null) return ''
+      return String(value)
+    }
+
+    let executionParams: Record<string, unknown> = {}
 
     switch (operation) {
       case 'create':
         executionParams = {
           _method: 'POST',
           _url: 'https://api.raindrop.io/rest/v1/raindrop',
-          _body: JSON.stringify({
-            link: '{{params.url}}',
-            title: '{{params.title}}',
-            tags: '{{params.tags}}',
-            excerpt: '{{params.excerpt}}'
-          })
+          _body: {
+            link: readParamString(controller.params?.url),
+            title: readParamString(controller.params?.title),
+            tags: readParamString(controller.params?.tags),
+            excerpt: readParamString(controller.params?.excerpt)
+          }
         }
         break
       case 'update':
         executionParams = {
           _method: 'PUT',
           _url: `https://api.raindrop.io/rest/v1/raindrop/{{params.bookmark_id}}`,
-          _body: JSON.stringify({
-            title: '{{params.title}}',
-            tags: '{{params.tags}}',
-            excerpt: '{{params.excerpt}}'
-          })
+          _body: {
+            title: readParamString(controller.params?.title),
+            tags: readParamString(controller.params?.tags),
+            excerpt: readParamString(controller.params?.excerpt)
+          }
         }
         break
       case 'delete':
@@ -1480,9 +1486,37 @@ function FlyoutActionFields({
     }
 
     // Update execution params if they changed
-    const needsUpdate = Object.keys(executionParams).some(
-      (key) => controller.params?.[key] !== executionParams[key]
-    )
+    const bodyMatches = (
+      current: unknown,
+      next: Record<string, string> | string
+    ) => {
+      if (typeof next === 'string') {
+        return current === next
+      }
+      if (!current || typeof current !== 'object' || Array.isArray(current)) {
+        return false
+      }
+      const record = current as Record<string, unknown>
+      if (Object.keys(record).length !== Object.keys(next).length) {
+        return false
+      }
+      return Object.entries(next).every(([key, value]) => {
+        const existing = record[key]
+        if (typeof existing === 'string') return existing === value
+        if (existing == null) return value === ''
+        return String(existing) === value
+      })
+    }
+
+    const needsUpdate = Object.keys(executionParams).some((key) => {
+      if (key === '_body') {
+        return !bodyMatches(
+          controller.params?._body,
+          executionParams._body as Record<string, string> | string
+        )
+      }
+      return controller.params?.[key] !== executionParams[key]
+    })
 
     if (needsUpdate) {
       controller.updateParams(executionParams, { markDirty: false })
