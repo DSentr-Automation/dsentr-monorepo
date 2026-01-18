@@ -33,3 +33,4 @@
 - Worker execution now receives the engine action registry so run dispatch always uses explicit action registrations.
 - Worker startup now builds the action registry internally so the public worker entrypoint no longer exposes registry types.
 - Worker test AppState fixtures now seed the integration registry to keep shared state wiring consistent.
+- Scheduled run snapshots now normalize egress allowlists to vetted host entries before enqueueing.

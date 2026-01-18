@@ -10,7 +10,10 @@ use crate::{
         enforce_runaway_protection, RunawayProtectionError, RUNAWAY_PROTECTION_ERROR,
     },
     state::WorkspaceRunQuotaTicket,
-    utils::{secrets::hydrate_secrets_into_snapshot, workflow_connection_metadata},
+    utils::{
+        egress_allowlist::normalize_egress_allowlist, secrets::hydrate_secrets_into_snapshot,
+        workflow_connection_metadata,
+    },
 };
 
 /// Hydrate action manifest HTTP data into workflow snapshot
@@ -381,10 +384,19 @@ pub async fn start_workflow_run(
 
     // --------------------------------------
 
+    let (egress_allowlist, rejected_entries) =
+        normalize_egress_allowlist(wf.egress_allowlist.clone());
+    if !rejected_entries.is_empty() {
+        tracing::warn!(
+            workflow_id = %wf.id,
+            workspace_id = ?wf.workspace_id,
+            rejected = ?rejected_entries,
+            "Rejected invalid workflow egress allowlist entries"
+        );
+    }
     snapshot["_egress_allowlist"] = serde_json::Value::Array(
-        wf.egress_allowlist
-            .iter()
-            .cloned()
+        egress_allowlist
+            .into_iter()
             .map(serde_json::Value::String)
             .collect(),
     );

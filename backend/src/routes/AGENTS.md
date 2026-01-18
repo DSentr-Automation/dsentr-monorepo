@@ -105,3 +105,4 @@
 - Webhook ingress now consumes workspace run quota per enqueued run and releases quota when enqueue attempts fail so run usage stays accurate.
 - Added a read-only `/api/actions` route that returns the action manifest catalog for frontend discovery without exposing secrets.
 - Route test AppState builders now include the integration registry to match the expanded shared state.
+- Webhook run snapshots now normalize workflow egress allowlists to vetted host entries before enqueueing.

@@ -35,6 +35,7 @@ use crate::routes::webhook_ingress_validation::{
     validate_webhook_signature, WebhookSignatureError, SIGNATURE_HEADER, TIMESTAMP_HEADER,
 };
 use crate::state::AppState;
+use crate::utils::egress_allowlist::normalize_egress_allowlist;
 
 // Payload field used to match webhook subscriptions.
 const EVENT_TYPE_FIELD: &str = "event_type";
@@ -1844,11 +1845,19 @@ async fn handle_webhook_ingress(
         snapshot["_trigger_context"] =
             merge_trigger_context(payload.clone(), &trigger_node_id, &trigger_type, "webhook");
         snapshot["_start_from_node"] = Value::String(trigger_node_id);
+        let (egress_allowlist, rejected_entries) =
+            normalize_egress_allowlist(workflow.egress_allowlist.clone());
+        if !rejected_entries.is_empty() {
+            warn!(
+                workflow_id = %workflow.id,
+                workspace_id = ?workflow.workspace_id,
+                rejected = ?rejected_entries,
+                "Rejected invalid workflow egress allowlist entries"
+            );
+        }
         snapshot["_egress_allowlist"] = Value::Array(
-            workflow
-                .egress_allowlist
-                .iter()
-                .cloned()
+            egress_allowlist
+                .into_iter()
                 .map(Value::String)
                 .collect(),
         );
@@ -2556,7 +2565,7 @@ mod tests {
             description: None,
             data: json!({ "nodes": [], "edges": [] }),
             concurrency_limit: 1,
-            egress_allowlist: vec!["https://example.com".into()],
+            egress_allowlist: vec!["example.com".into()],
             locked_by: None,
             locked_at: None,
             created_at: now,
@@ -3379,7 +3388,7 @@ mod tests {
                 );
                 assert_eq!(
                     snapshot.get("_egress_allowlist"),
-                    Some(&json!(["https://example.com"]))
+                    Some(&json!(["example.com"]))
                 );
                 let now = OffsetDateTime::now_utc();
                 let run = WorkflowRun {

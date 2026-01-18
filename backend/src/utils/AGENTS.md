@@ -23,3 +23,4 @@
 - Secret store helpers now use `API_SECRETS_ENCRYPTION_KEY` for encrypting/decrypting stored API keys, signal when legacy plaintext values need rewriting, and support rotation with the shared helper script.
 - Added a change-history helper that resolves actor labels and fans workspace-level audit diffs across all workflows so settings logs can track shared events.
 - Plan limits now flag Notion polling triggers/actions as Workspace-only nodes to align UI gating with backend enforcement.
+- Added egress allowlist normalization helpers to trim/validate host entries before they reach runtime enforcement.

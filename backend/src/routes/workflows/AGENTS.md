@@ -39,3 +39,4 @@
 - Trigger start validation helpers now allow large Response errors to keep run request signatures stable without clippy noise.
 - Workflow run test AppState fixtures now include the integration registry to match the expanded shared state.
 - Workflow plan violation messages now use ASCII punctuation to fix encoding corruption.
+- Workflow run snapshots now normalize egress allowlists to trimmed host entries before enqueueing.

@@ -1,5 +1,6 @@
 pub mod change_history;
 pub mod csrf;
+pub mod egress_allowlist;
 pub mod encryption;
 pub mod ip;
 pub mod jwt;

@@ -16,6 +16,7 @@ use crate::models::workflow_run::WorkflowRun;
 use crate::models::workflow_run_event::NewWorkflowRunEvent;
 use crate::state::AppState;
 use crate::utils::{
+    egress_allowlist::normalize_egress_allowlist,
     schedule::utc_to_offset,
     secrets::{hydrate_secrets_into_snapshot, read_secret_store},
     workflow_connection_metadata,
@@ -901,16 +902,20 @@ fn parse_host_list(raw: &str) -> Vec<String> {
 }
 
 fn collect_snapshot_allowlist(value: Option<&Value>) -> Vec<String> {
-    let mut hosts: Vec<String> = Vec::new();
+    let mut entries: Vec<String> = Vec::new();
     if let Some(arr) = value.and_then(|v| v.as_array()) {
         for item in arr {
             if let Some(s) = item.as_str() {
-                let trimmed = s.trim().to_lowercase();
-                if !trimmed.is_empty() {
-                    hosts.push(trimmed);
-                }
+                entries.push(s.to_string());
             }
         }
+    }
+    let (mut hosts, rejected_entries) = normalize_egress_allowlist(entries);
+    if !rejected_entries.is_empty() {
+        warn!(
+            rejected = ?rejected_entries,
+            "Snapshot egress allowlist entries rejected"
+        );
     }
     hosts.sort();
     hosts.dedup();
@@ -1143,9 +1148,54 @@ mod tests {
     use httpmock::MockServer;
     use reqwest::Client;
     use serde_json::json;
+    use std::io::Write;
     use std::sync::{Arc, Mutex};
     use time::OffsetDateTime;
     use uuid::Uuid;
+
+    #[derive(Clone)]
+    struct BufferingMakeWriter {
+        buffer: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl BufferingMakeWriter {
+        fn new() -> Self {
+            Self {
+                buffer: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn output(&self) -> String {
+            let guard = self.buffer.lock().expect("log buffer lock poisoned");
+            String::from_utf8_lossy(&guard).to_string()
+        }
+    }
+
+    struct BufferWriter {
+        buffer: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BufferingMakeWriter {
+        type Writer = BufferWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            BufferWriter {
+                buffer: Arc::clone(&self.buffer),
+            }
+        }
+    }
+
+    impl Write for BufferWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let mut guard = self.buffer.lock().expect("log buffer lock poisoned");
+            guard.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
     fn test_jwt_keys() -> Arc<JwtKeys> {
         Arc::new(
@@ -1273,6 +1323,23 @@ mod tests {
         let hosts = collect_snapshot_allowlist(Some(&snapshot));
 
         assert_eq!(hosts, vec!["api.example.com", "example.com"]);
+    }
+
+    #[test]
+    fn collect_snapshot_allowlist_logs_rejections() {
+        let make_writer = BufferingMakeWriter::new();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(make_writer.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let snapshot = json!(["https://example.com", "example.com"]);
+        let hosts = collect_snapshot_allowlist(Some(&snapshot));
+
+        assert_eq!(hosts, vec!["example.com"]);
+        let output = make_writer.output();
+        assert!(output.contains("Snapshot egress allowlist entries rejected"));
+        assert!(output.contains("https://example.com"));
     }
 
     #[test]

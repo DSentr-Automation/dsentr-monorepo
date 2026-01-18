@@ -23,7 +23,7 @@ use crate::utils::jwt::JwtKeys;
 use crate::utils::schedule::{
     compute_next_run, offset_to_utc, parse_schedule_config, utc_to_offset,
 };
-use crate::utils::workflow_connection_metadata;
+use crate::utils::{egress_allowlist::normalize_egress_allowlist, workflow_connection_metadata};
 use chrono::{Duration as ChronoDuration, Utc};
 use serde_json::{json, Value};
 use tokio::task::JoinSet;
@@ -412,9 +412,19 @@ async fn trigger_schedule(state: &AppState, schedule: WorkflowSchedule) -> Resul
     };
 
     let mut snapshot = workflow.data.clone();
+    let (egress_allowlist, rejected_entries) =
+        normalize_egress_allowlist(workflow.egress_allowlist.clone());
+    if !rejected_entries.is_empty() {
+        warn!(
+            worker_id = %state.worker_id,
+            workflow_id = %workflow.id,
+            schedule_id = %schedule.id,
+            rejected = ?rejected_entries,
+            "Rejected invalid workflow egress allowlist entries"
+        );
+    }
     snapshot["_egress_allowlist"] = Value::Array(
-        workflow
-            .egress_allowlist
+        egress_allowlist
             .iter()
             .cloned()
             .map(Value::String)
@@ -874,9 +884,19 @@ async fn trigger_notion_schedule(
     }
 
     let mut base_snapshot = workflow.data.clone();
+    let (egress_allowlist, rejected_entries) =
+        normalize_egress_allowlist(workflow.egress_allowlist.clone());
+    if !rejected_entries.is_empty() {
+        warn!(
+            worker_id = %state.worker_id,
+            workflow_id = %workflow.id,
+            schedule_id = %schedule.id,
+            rejected = ?rejected_entries,
+            "Rejected invalid workflow egress allowlist entries"
+        );
+    }
     base_snapshot["_egress_allowlist"] = Value::Array(
-        workflow
-            .egress_allowlist
+        egress_allowlist
             .iter()
             .cloned()
             .map(Value::String)
