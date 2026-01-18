@@ -48,6 +48,8 @@ pub(crate) struct ActionInput {
     #[serde(rename = "connection_scopes")]
     pub connection_scopes: Option<Vec<String>>,
     pub options: Option<Vec<String>>,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
 }
 
 #[allow(dead_code)]
@@ -288,21 +290,72 @@ fn validate_inputs(inputs: &[ActionInput]) -> Result<(), String> {
         if input.label.trim().is_empty() {
             return Err(format!("inputs.{}.label is required", name));
         }
-        if input.field_type.trim().is_empty() {
+        let field_type = input.field_type.trim();
+        if field_type.is_empty() {
             return Err(format!("inputs.{}.type is required", name));
+        }
+        let normalized_type = field_type.to_ascii_lowercase();
+        match normalized_type.as_str() {
+            "string" | "enum" | "oauth_connection" | "number" | "boolean" | "string[]" | "object" => {
+            }
+            _ => {
+                return Err(format!(
+                    "inputs.{}.type `{}` is not supported",
+                    name, field_type
+                ));
+            }
         }
         if !seen.insert(name.to_ascii_lowercase()) {
             return Err(format!("duplicate input name `{}`", name));
         }
 
+        if normalized_type == "enum" {
+            let options = input
+                .options
+                .as_ref()
+                .filter(|values| !values.is_empty())
+                .ok_or_else(|| {
+                    format!("inputs.{}.options is required for enum type", name)
+                })?;
+            if options.iter().any(|value| value.trim().is_empty()) {
+                return Err(format!(
+                    "inputs.{}.options entries cannot be empty",
+                    name
+                ));
+            }
+        } else if input.options.is_some() {
+            return Err(format!(
+                "inputs.{}.options is only valid for enum inputs",
+                name
+            ));
+        }
+
         // OAuth-specific validation
-        if input.field_type == "oauth_connection"
+        if normalized_type == "oauth_connection"
             && (input.provider.is_none() || input.provider.as_ref().unwrap().trim().is_empty())
         {
             return Err(format!(
                 "inputs.{}.provider is required for oauth_connection type",
                 name
             ));
+        }
+
+        if normalized_type != "number" && (input.min.is_some() || input.max.is_some()) {
+            return Err(format!(
+                "inputs.{}.min/max is only valid for number inputs",
+                name
+            ));
+        }
+
+        if normalized_type == "number" {
+            if let (Some(min), Some(max)) = (input.min, input.max) {
+                if min > max {
+                    return Err(format!(
+                        "inputs.{}.min cannot be greater than max",
+                        name
+                    ));
+                }
+            }
         }
     }
     Ok(())
@@ -378,6 +431,31 @@ fn is_json_file(path: &std::path::Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn manifest_with_input(input: serde_json::Value) -> ActionManifestSpec {
+        let value = json!({
+            "action_id": "test.action",
+            "executor": "http",
+            "ui": {
+                "label": "Test",
+                "description": "Test action",
+                "category": "Test",
+                "icon": "test"
+            },
+            "inputs": [input],
+            "http": {
+                "method": "GET",
+                "url": "https://example.com",
+                "headers": [],
+                "queryParams": [],
+                "bodyType": "raw",
+                "body": "",
+                "formBody": []
+            }
+        });
+        serde_json::from_value(value).expect("manifest should parse")
+    }
 
     #[test]
     fn validate_oauth_connection_input_success() {
@@ -398,6 +476,8 @@ mod tests {
                 provider: Some("bitly".to_string()),
                 connection_scopes: Some(vec!["personal".to_string(), "workspace".to_string()]),
                 options: None,
+                min: None,
+                max: None,
             }],
             http: HttpManifest {
                 method: "GET".to_string(),
@@ -434,6 +514,8 @@ mod tests {
                 provider: None,
                 connection_scopes: Some(vec!["personal".to_string()]),
                 options: None,
+                min: None,
+                max: None,
             }],
             http: HttpManifest {
                 method: "GET".to_string(),
@@ -471,6 +553,8 @@ mod tests {
                 provider: Some("".to_string()),
                 connection_scopes: Some(vec!["personal".to_string()]),
                 options: None,
+                min: None,
+                max: None,
             }],
             http: HttpManifest {
                 method: "GET".to_string(),
@@ -509,6 +593,8 @@ mod tests {
                 provider: None,
                 connection_scopes: None,
                 options: None,
+                min: None,
+                max: None,
             }],
             http: HttpManifest {
                 method: "GET".to_string(),
@@ -524,5 +610,99 @@ mod tests {
 
         let result = validate_manifest(&manifest);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_new_input_types_parse_and_validate() {
+        let inputs = vec![
+            json!({
+                "name": "count",
+                "label": "Count",
+                "type": "number",
+                "required": false,
+                "min": 1,
+                "max": 10
+            }),
+            json!({
+                "name": "enabled",
+                "label": "Enabled",
+                "type": "boolean",
+                "required": false
+            }),
+            json!({
+                "name": "tags",
+                "label": "Tags",
+                "type": "string[]",
+                "required": false
+            }),
+            json!({
+                "name": "payload",
+                "label": "Payload",
+                "type": "object",
+                "required": false
+            }),
+        ];
+
+        for input in inputs {
+            let manifest = manifest_with_input(input);
+            let result = validate_manifest(&manifest);
+            assert!(result.is_ok());
+        }
+    }
+
+    #[test]
+    fn validate_enum_requires_options() {
+        let manifest = manifest_with_input(json!({
+            "name": "choice",
+            "label": "Choice",
+            "type": "enum",
+            "required": true
+        }));
+
+        let err = validate_manifest(&manifest).expect_err("enum should require options");
+        assert!(err.contains("options is required"));
+    }
+
+    #[test]
+    fn validate_number_min_max_order() {
+        let manifest = manifest_with_input(json!({
+            "name": "count",
+            "label": "Count",
+            "type": "number",
+            "required": false,
+            "min": 10,
+            "max": 2
+        }));
+
+        let err = validate_manifest(&manifest).expect_err("min/max should be ordered");
+        assert!(err.contains("min cannot be greater than max"));
+    }
+
+    #[test]
+    fn validate_options_rejected_for_non_enum() {
+        let manifest = manifest_with_input(json!({
+            "name": "count",
+            "label": "Count",
+            "type": "number",
+            "required": false,
+            "options": ["lol"]
+        }));
+
+        let err = validate_manifest(&manifest).expect_err("options should be rejected");
+        assert!(err.contains("options is only valid for enum"));
+    }
+
+    #[test]
+    fn validate_min_max_rejected_for_non_number() {
+        let manifest = manifest_with_input(json!({
+            "name": "enabled",
+            "label": "Enabled",
+            "type": "boolean",
+            "required": false,
+            "min": 0
+        }));
+
+        let err = validate_manifest(&manifest).expect_err("min/max should be rejected");
+        assert!(err.contains("min/max is only valid for number"));
     }
 }

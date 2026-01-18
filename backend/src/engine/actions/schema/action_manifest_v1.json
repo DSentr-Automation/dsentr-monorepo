@@ -39,7 +39,15 @@
 
           "type": {
             "type": "string",
-            "enum": ["string", "oauth_connection", "enum"]
+            "enum": [
+              "string",
+              "string[]",
+              "number",
+              "boolean",
+              "object",
+              "oauth_connection",
+              "enum"
+            ]
           },
 
           "required": { "type": "boolean" },
@@ -65,6 +73,14 @@
               "type": "string",
               "minLength": 1
             }
+          },
+
+          "min": {
+            "type": "number"
+          },
+
+          "max": {
+            "type": "number"
           }
         },
 

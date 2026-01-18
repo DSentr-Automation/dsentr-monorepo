@@ -58,3 +58,5 @@
 - Added startup-loaded JSON action manifests that map to existing executors so new HTTP action nodes can be registered without new Rust action modules.
 - Added an action manifest registry accessor so routes can expose a read-only action catalog without touching executor logic.
 - Tightened HTTP action templating so methods and URLs render/validate explicitly, and added a debug log for resolved method/host with allowlist mode.
+- Action manifest inputs now allow more field types with optional min/max metadata and enforce enum/number validation plus schema updates.
+- Action manifest input validation now rejects options/min-max on non-enum or non-number inputs to keep manifests strict.
