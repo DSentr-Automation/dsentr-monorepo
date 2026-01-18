@@ -40,3 +40,4 @@
 - Executor tests now avoid redundant JSON imports so test builds stay warning-free.
 - Executor test scaffolding now seeds the integration registry in AppState to align with the new startup wiring.
 - Engine startup now loads JSON action manifests and maps them to existing executors so custom action nodes resolve during registry construction.
+- Executor now merges node inputs into templating params (with params overriding), and tests cover manifest HTTP templates resolving POST methods from inputs.

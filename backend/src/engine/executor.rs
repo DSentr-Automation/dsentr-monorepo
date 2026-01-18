@@ -21,7 +21,7 @@ use crate::utils::{
     workflow_connection_metadata,
 };
 
-use super::graph::Graph;
+use super::graph::{Graph, Node};
 
 const PERSISTENCE_MAX_ATTEMPTS: usize = 3;
 #[cfg(test)]
@@ -465,10 +465,8 @@ pub(crate) async fn execute_run(
             }
         }
 
-        // Merge node params into templating context
-        if let Some(params) = node.data.get("params") {
-            enhanced_context.insert("params".to_string(), params.clone());
-        }
+        // Merge node inputs/params into templating context.
+        enhanced_context.insert("params".to_string(), merged_node_params(node));
 
         let context_value = Value::Object(enhanced_context);
         let node_label = node
@@ -876,6 +874,21 @@ async fn hydrate_run_secrets(state: &AppState, run: &mut WorkflowRun) -> Result<
     Ok(())
 }
 
+fn merged_node_params(node: &Node) -> Value {
+    let mut merged = Map::new();
+    if let Some(inputs) = node.data.get("inputs").and_then(|v| v.as_object()) {
+        for (key, value) in inputs {
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+    if let Some(params) = node.data.get("params").and_then(|v| v.as_object()) {
+        for (key, value) in params {
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+    Value::Object(merged)
+}
+
 fn parse_host_list(raw: &str) -> Vec<String> {
     let mut hosts: Vec<String> = raw
         .split(',')
@@ -1111,7 +1124,10 @@ mod tests {
     use crate::db::mock_stripe_event_log_repository::MockStripeEventLogRepository;
     use crate::db::workflow_repository::{MockWorkflowRepository, WorkflowRepository};
     use crate::db::workspace_connection_repository::NoopWorkspaceConnectionRepository;
-    use crate::engine::actions::registry::ActionExecutionSemantics;
+    use crate::engine::actions::registry::{
+        ActionExecutionResult, ActionExecutionSemantics, ActionExecutor, ActionRuntimeContext,
+        HttpExecutor,
+    };
     use crate::engine::build_action_registry;
     use crate::models::workflow_run::WorkflowRun;
     use crate::models::workflow_run_event::WorkflowRunEvent;
@@ -1124,6 +1140,7 @@ mod tests {
     use crate::services::stripe::MockStripeService;
     use crate::state::{test_pg_pool, AppState};
     use crate::utils::jwt::JwtKeys;
+    use httpmock::MockServer;
     use reqwest::Client;
     use serde_json::json;
     use std::sync::{Arc, Mutex};
@@ -1362,6 +1379,72 @@ mod tests {
             created_at: now,
             updated_at: now,
         }
+    }
+
+    #[tokio::test]
+    async fn manifest_inputs_merge_into_params_for_http_templates() {
+        let server = MockServer::start();
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/bookmarks")
+                .json_body(json!({"title": "Example"}));
+            then.status(200).json_body(json!({"ok": true}));
+        });
+
+        let run = base_run(
+            "action",
+            json!({
+                "label": "Raindrop",
+                "actionType": "raindrop.bookmark",
+                "inputs": {
+                    "_method": "post",
+                    "_url": server.url("/bookmarks"),
+                    "_body": "{\"title\":\"Example\"}"
+                },
+                "http": {
+                    "method": "{{params._method}}",
+                    "url": "{{params._url}}",
+                    "headers": [
+                        {
+                            "key": "Content-Type",
+                            "value": "application/json"
+                        }
+                    ],
+                    "queryParams": [],
+                    "bodyType": "json",
+                    "body": "{{params._body}}",
+                    "formBody": []
+                }
+            }),
+        );
+
+        let graph = Graph::from_snapshot(&run.snapshot).expect("graph should build");
+        let node = graph.nodes.get("node-1").expect("node should exist");
+        let mut context = Map::new();
+        context.insert("params".to_string(), merged_node_params(node));
+        let context_value = Value::Object(context);
+
+        let state = build_state(MockWorkflowRepository::new());
+        let executor = HttpExecutor;
+        let runtime = ActionRuntimeContext {
+            node,
+            context: &context_value,
+            allowed_hosts: &[],
+            disallowed_hosts: &[],
+            default_deny: false,
+            is_prod: false,
+            state: &state,
+            run: &run,
+        };
+
+        let result = executor.execute(runtime).await.expect("http should run");
+        let outputs = match result {
+            ActionExecutionResult::Immediate { outputs, .. } => outputs,
+            _ => panic!("expected immediate result"),
+        };
+
+        mock.assert();
+        assert_eq!(outputs.get("status").and_then(|v| v.as_u64()), Some(200));
     }
 
     #[tokio::test]
