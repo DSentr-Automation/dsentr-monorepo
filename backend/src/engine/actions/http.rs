@@ -117,32 +117,9 @@ pub(crate) async fn execute_http(
     state: &AppState,
     run: &WorkflowRun,
 ) -> Result<(Value, Option<String>), String> {
-    use serde_json::to_string_pretty;
-    use tracing::error;
-
     let params = node.data.get("params").cloned().unwrap_or(Value::Null);
 
-    error!(
-        "[HTTP EXECUTOR ENTRY] action={} node_id={}",
-        node.data
-            .get("actionType")
-            .and_then(|v| v.as_str())
-            .unwrap_or("<missing>"),
-        node.id
-    );
-
-    error!(
-        "[HTTP EXECUTOR NODE.DATA]\n{}",
-        to_string_pretty(&node.data).unwrap_or_else(|_| "<unserializable>".to_string())
-    );
-
     let manifest_http = node.data.get("http").cloned().unwrap_or(Value::Null);
-
-    error!(
-        "[HTTP EXECUTOR URL CHECK] params.url={:?} manifest_http.url={:?}",
-        params.get("url"),
-        manifest_http.get("url")
-    );
 
     // ---- Resolve URL (manifest only) ----
 

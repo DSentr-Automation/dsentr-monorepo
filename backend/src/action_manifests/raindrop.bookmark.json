@@ -64,10 +64,8 @@
   ],
 
   "http": {
-    "method": "{{params.operation == 'delete' ? 'DELETE' : (params.operation == 'update' ? 'PUT' : 'POST')}}",
-
-    "url": "{{params.operation == 'create' ? 'https://api.raindrop.io/rest/v1/raindrop' : 'https://api.raindrop.io/rest/v1/raindrop/' + params.bookmark_id}}",
-
+    "method": "{{params._method}}",
+    "url": "{{params._url}}",
     "headers": [
       {
         "key": "Authorization",
@@ -78,13 +76,9 @@
         "value": "application/json"
       }
     ],
-
     "queryParams": [],
-
     "bodyType": "json",
-
-    "body": "{\"link\":\"{{params.url}}\",\"title\":\"{{params.title}}\",\"tags\":\"{{params.tags}}\",\"excerpt\":\"{{params.excerpt}}\"}",
-
+    "body": "{{params._body}}",
     "formBody": []
   },
 
