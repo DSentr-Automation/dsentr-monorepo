@@ -58,6 +58,8 @@ export type ActionInputDefinition = {
   provider?: string
   connectionScopes?: string[]
   options?: string[]
+  min?: number
+  max?: number
 }
 
 export type ActionDefinition = {
@@ -140,7 +142,7 @@ const normalizeManifestCategory = (rawCategory?: string | null): string => {
   return categoryMap[normalized] || rawCategory.trim()
 }
 
-// Enforces invariant: All manifest inputs are treated as strings regardless of manifest type field
+// Manifest inputs initialize based on their declared type.
 
 // Enforces invariant: Fallback action resolution is deterministic
 const DEFAULT_ACTION_ID = 'actionEmailSendgrid'
@@ -213,6 +215,19 @@ const normalizeInputs = (value: ActionCatalogEntry['inputs']) => {
       )
     }
 
+    if (
+      typeof (input as any).min === 'number' &&
+      Number.isFinite((input as any).min)
+    ) {
+      normalizedInput.min = (input as any).min
+    }
+    if (
+      typeof (input as any).max === 'number' &&
+      Number.isFinite((input as any).max)
+    ) {
+      normalizedInput.max = (input as any).max
+    }
+
     acc.push(normalizedInput)
     return acc
   }, [])
@@ -221,15 +236,32 @@ const normalizeInputs = (value: ActionCatalogEntry['inputs']) => {
 const buildEmptyParams = (inputs: ActionInputDefinition[]) => {
   const params: Record<string, unknown> = {}
   inputs.forEach((input) => {
-    if (input.type === 'oauth_connection') {
-      // OAuth inputs don't initialize as strings
-      params[input.name] = ''
-      params.connection = null
-      params.connectionScope = null
-      params.connectionId = null
-    } else {
-      // Enforces invariant: All other manifest inputs initialize as empty strings
-      params[input.name] = ''
+    switch (input.type) {
+      case 'oauth_connection':
+        // OAuth inputs don't initialize as strings
+        params[input.name] = ''
+        params.connection = null
+        params.connectionScope = null
+        params.connectionId = null
+        break
+      case 'enum':
+        params[input.name] = input.options?.[0] ?? ''
+        break
+      case 'number':
+        params[input.name] = null
+        break
+      case 'boolean':
+        params[input.name] = false
+        break
+      case 'string[]':
+        params[input.name] = []
+        break
+      case 'object':
+        params[input.name] = {}
+        break
+      default:
+        params[input.name] = ''
+        break
     }
   })
   return params
@@ -254,7 +286,6 @@ const buildManifestDefinition = (
       ? normalizeActionKey(ui.icon)
       : DEFAULT_ICON_KEY
   const inputs = normalizeInputs(entry.inputs)
-  const params = buildEmptyParams(inputs)
   const hasRequired = inputs.some((input) => input.required)
 
   return {
@@ -270,7 +301,7 @@ const buildManifestDefinition = (
     expanded: true,
     createNodeData: () => ({
       actionType: actionId,
-      params,
+      params: buildEmptyParams(inputs),
       timeout: 5000,
       retries: 0,
       stopOnError: true,
@@ -679,7 +710,7 @@ const mergeActions = (catalogActions: ActionDefinition[]) => {
   return merged
 }
 
-// Enforces invariant: All manifest inputs are treated as strings regardless of manifest type field
+// Manifest inputs initialize based on their declared type.
 export const useActionRegistry = createWithEqualityFn<ActionRegistryState>(
   (set, get) => ({
     actions: BASE_ACTIONS,
@@ -707,6 +738,6 @@ export const useActionRegistry = createWithEqualityFn<ActionRegistryState>(
   })
 )
 
-// Enforces invariant: All manifest inputs are treated as strings regardless of manifest type field
+// Manifest inputs initialize based on their declared type.
 
 export { DEFAULT_ACTION_ID }

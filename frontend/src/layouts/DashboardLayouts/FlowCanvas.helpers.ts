@@ -33,6 +33,14 @@ const ACTION_NODE_TYPE_ALIASES: Record<string, string> = {
   'logic.formatter': 'formatter'
 }
 
+export type ManifestInputValue =
+  | string
+  | number
+  | boolean
+  | string[]
+  | Record<string, unknown>
+  | null
+
 function normalizeNodeType(nodeType: unknown): string | undefined {
   if (typeof nodeType !== 'string') {
     return undefined
@@ -87,6 +95,102 @@ export function normalizeNodesForState(
   })
 
   return reconcileNodeLabels(normalizedNodes)
+}
+
+export function formatManifestInputValue(
+  inputType: string,
+  rawValue: unknown
+): string | boolean {
+  switch (inputType) {
+    case 'boolean': {
+      if (typeof rawValue === 'boolean') return rawValue
+      if (typeof rawValue === 'string') {
+        const lowered = rawValue.trim().toLowerCase()
+        if (lowered === 'true') return true
+        if (lowered === 'false') return false
+      }
+      return false
+    }
+    case 'number':
+      if (typeof rawValue === 'number' && Number.isFinite(rawValue)) {
+        return String(rawValue)
+      }
+      return typeof rawValue === 'string' ? rawValue : ''
+    case 'string[]':
+      if (Array.isArray(rawValue)) {
+        return rawValue.map((value) => String(value)).join(', ')
+      }
+      return typeof rawValue === 'string' ? rawValue : ''
+    case 'object':
+      if (
+        rawValue &&
+        typeof rawValue === 'object' &&
+        !Array.isArray(rawValue)
+      ) {
+        try {
+          return JSON.stringify(rawValue, null, 2)
+        } catch {
+          return ''
+        }
+      }
+      return typeof rawValue === 'string' ? rawValue : ''
+    default:
+      if (typeof rawValue === 'string') return rawValue
+      if (rawValue == null) return ''
+      return String(rawValue)
+  }
+}
+
+export function parseManifestInputValue(
+  inputType: string,
+  rawValue: string | boolean
+): { value: ManifestInputValue; error?: string } {
+  switch (inputType) {
+    case 'boolean': {
+      if (typeof rawValue === 'boolean') return { value: rawValue }
+      if (typeof rawValue === 'string') {
+        const lowered = rawValue.trim().toLowerCase()
+        if (lowered === 'true') return { value: true }
+        if (lowered === 'false') return { value: false }
+      }
+      return { value: false }
+    }
+    case 'number': {
+      if (typeof rawValue !== 'string') return { value: null }
+      const trimmed = rawValue.trim()
+      if (!trimmed) return { value: null }
+      const parsed = Number(trimmed)
+      if (!Number.isFinite(parsed)) {
+        return { value: null, error: 'Invalid number' }
+      }
+      return { value: parsed }
+    }
+    case 'string[]': {
+      if (typeof rawValue !== 'string') return { value: [] }
+      const parts = rawValue
+        .split(',')
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0)
+      return { value: parts }
+    }
+    case 'object': {
+      if (typeof rawValue !== 'string') return { value: {} }
+      const trimmed = rawValue.trim()
+      if (!trimmed) return { value: {} }
+      try {
+        const parsed = JSON.parse(trimmed)
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          return { value: null, error: 'Must be a JSON object' }
+        }
+        return { value: parsed as Record<string, unknown> }
+      } catch {
+        return { value: null, error: 'Invalid JSON' }
+      }
+    }
+    default:
+      if (typeof rawValue === 'string') return { value: rawValue }
+      return { value: '' }
+  }
 }
 
 export function hydrateIncomingNodes(

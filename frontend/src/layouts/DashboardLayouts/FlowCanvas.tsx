@@ -60,7 +60,9 @@ import {
 } from '@/stores/workflowStore'
 import {
   normalizeEdgesForState,
-  normalizeNodesForState
+  normalizeNodesForState,
+  formatManifestInputValue,
+  parseManifestInputValue
 } from './FlowCanvas.helpers'
 import { WorkflowFlyoutProvider } from '@/components/workflow/useWorkflowFlyout'
 import { X } from 'lucide-react'
@@ -110,6 +112,7 @@ import { shallow } from 'zustand/shallow'
 import {
   useActionRegistry,
   type ActionDefinition,
+  type ActionInputDefinition,
   type ActionNodeRendererProps,
   DEFAULT_ACTION_ID
 } from '@/stores/actionRegistry'
@@ -183,6 +186,145 @@ function normalizeLogicDropSubtype(
 
 const normalizeActionKey = (value?: string | null) =>
   typeof value === 'string' ? value.trim().toLowerCase() : ''
+
+const isRequiredInputMissing = (
+  input: ActionInputDefinition,
+  params: ActionNodeData['params'] | undefined
+) => {
+  if (!input.required) return false
+  if (input.type === 'oauth_connection') {
+    return !params?.connectionId || !params?.connectionScope
+  }
+
+  const rawValue = params?.[input.name]
+  switch (input.type) {
+    case 'number': {
+      if (typeof rawValue === 'number' && Number.isFinite(rawValue)) {
+        return false
+      }
+      if (typeof rawValue === 'string') {
+        const parsed = Number(rawValue.trim())
+        return !Number.isFinite(parsed)
+      }
+      return true
+    }
+    case 'boolean': {
+      if (typeof rawValue === 'boolean') return false
+      if (typeof rawValue === 'string') {
+        const lowered = rawValue.trim().toLowerCase()
+        return lowered !== 'true' && lowered !== 'false'
+      }
+      return true
+    }
+    case 'string[]': {
+      if (Array.isArray(rawValue)) return rawValue.length === 0
+      if (typeof rawValue === 'string') return rawValue.trim().length === 0
+      return true
+    }
+    case 'object': {
+      if (
+        rawValue &&
+        typeof rawValue === 'object' &&
+        !Array.isArray(rawValue)
+      ) {
+        return Object.keys(rawValue as Record<string, unknown>).length === 0
+      }
+      if (typeof rawValue === 'string') return rawValue.trim().length === 0
+      return true
+    }
+    default: {
+      if (typeof rawValue === 'string') return rawValue.trim().length === 0
+      if (rawValue == null) return true
+      return String(rawValue).trim().length === 0
+    }
+  }
+}
+
+interface ManifestObjectInputProps {
+  value: unknown
+  onChange: (nextValue: Record<string, unknown>) => void
+  disabled: boolean
+}
+
+function ManifestObjectInput({
+  value,
+  onChange,
+  disabled
+}: ManifestObjectInputProps) {
+  const formatted = useMemo(() => {
+    const formattedValue = formatManifestInputValue('object', value)
+    return typeof formattedValue === 'string' ? formattedValue : ''
+  }, [value])
+  const [textValue, setTextValue] = useState(formatted)
+  const [error, setError] = useState<string | null>(null)
+  const latestValueRef = useRef(formatted)
+  const lastEmittedRef = useRef(formatted)
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const isTestEnv =
+    typeof import.meta !== 'undefined' && import.meta.env?.MODE === 'test'
+
+  useEffect(() => {
+    if (formatted !== latestValueRef.current) {
+      latestValueRef.current = formatted
+      lastEmittedRef.current = formatted
+      setTextValue(formatted)
+      setError(null)
+    }
+  }, [formatted])
+
+  useEffect(
+    () => () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current)
+      }
+    },
+    []
+  )
+
+  const handleChange = useCallback(
+    (nextValue: string) => {
+      setTextValue(nextValue)
+      latestValueRef.current = nextValue
+
+      if (nextValue === lastEmittedRef.current) {
+        setError(null)
+        return
+      }
+
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current)
+      }
+
+      timeoutRef.current = setTimeout(
+        () => {
+          const parsed = parseManifestInputValue('object', nextValue)
+          if (parsed.error) {
+            setError(parsed.error)
+            return
+          }
+          setError(null)
+          lastEmittedRef.current = nextValue
+          onChange(parsed.value as Record<string, unknown>)
+        },
+        isTestEnv ? 0 : 250
+      )
+    },
+    [isTestEnv, onChange]
+  )
+
+  return (
+    <>
+      <textarea
+        rows={4}
+        value={textValue}
+        onChange={(event) => handleChange(event.target.value)}
+        disabled={disabled}
+        className="w-full rounded border border-zinc-300 bg-white p-2 text-xs text-zinc-900 shadow-sm placeholder-zinc-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/40 dark:border-zinc-700 dark:bg-zinc-900/70 dark:text-zinc-100 dark:placeholder-zinc-500 nodrag"
+      />
+      {error ? <p className="text-xs text-red-500">{error}</p> : null}
+    </>
+  )
+}
 
 interface FlowCanvasProps {
   isDark?: boolean
@@ -1275,17 +1417,9 @@ function FlyoutActionFields({
   const requiredInputMissing = useMemo(
     () =>
       managesDynamicInputs &&
-      allInputs.some((input) => {
-        if (!input.required) return false
-        const rawValue = controller.params?.[input.name]
-        const value =
-          typeof rawValue === 'string'
-            ? rawValue
-            : rawValue == null
-              ? ''
-              : String(rawValue)
-        return value.trim().length === 0
-      }),
+      allInputs.some((input) =>
+        isRequiredInputMissing(input, controller.params)
+      ),
     [controller.params, managesDynamicInputs, allInputs]
   )
   const currentInputErrors = Boolean(nodeData?.hasValidationErrors)
@@ -1431,6 +1565,8 @@ function FlyoutActionFields({
     return (
       <div className="space-y-3">
         {getVisibleInputs.map((input) => {
+          const missing = isRequiredInputMissing(input, controller.params)
+
           // OAuth connection input handling
           if (input.type === 'oauth_connection') {
             const connectionValue = controller.params?.connectionId
@@ -1448,10 +1584,6 @@ function FlyoutActionFields({
                     accountEmail?: string
                   })
                 : null
-
-            const missing =
-              input.required &&
-              (!currentValue?.connectionId || !currentValue?.connectionScope)
 
             return (
               <div key={input.name} className="space-y-1">
@@ -1486,13 +1618,11 @@ function FlyoutActionFields({
           // Enum/dropdown input handling
           if (input.type === 'enum' && input.options) {
             const rawValue = controller.params?.[input.name]
+            const formatted = formatManifestInputValue('enum', rawValue)
             const value =
-              typeof rawValue === 'string'
-                ? rawValue
-                : rawValue == null
-                  ? input.options[0] || ''
-                  : String(rawValue)
-            const missing = input.required && value.trim().length === 0
+              typeof formatted === 'string' && formatted.trim().length > 0
+                ? formatted
+                : input.options[0] || ''
 
             const dropdownOptions = input.options.map((option) => ({
               label: option,
@@ -1523,15 +1653,134 @@ function FlyoutActionFields({
             )
           }
 
+          if (input.type === 'number') {
+            const rawValue = controller.params?.[input.name]
+            const formatted = formatManifestInputValue('number', rawValue)
+            const value = typeof formatted === 'string' ? formatted : ''
+
+            return (
+              <div key={input.name} className="space-y-1">
+                <label className="block text-[10px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                  {input.label}
+                  {input.required ? ' *' : ''}
+                </label>
+                <input
+                  type="number"
+                  min={input.min}
+                  max={input.max}
+                  value={value}
+                  onChange={(event) => {
+                    const parsed = parseManifestInputValue(
+                      'number',
+                      event.target.value
+                    )
+                    if (parsed.error) return
+                    controller.updateParams(
+                      { [input.name]: parsed.value },
+                      { markDirty: true }
+                    )
+                  }}
+                  disabled={!controller.effectiveCanEdit}
+                  className="w-full rounded border border-zinc-300 bg-white p-2 text-xs text-zinc-900 shadow-sm placeholder-zinc-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/40 dark:border-zinc-700 dark:bg-zinc-900/70 dark:text-zinc-100 dark:placeholder-zinc-500 nodrag"
+                />
+                {missing ? (
+                  <p className="text-xs text-red-500">Required</p>
+                ) : null}
+              </div>
+            )
+          }
+
+          if (input.type === 'boolean') {
+            const rawValue = controller.params?.[input.name]
+            const checked = formatManifestInputValue('boolean', rawValue)
+
+            return (
+              <div key={input.name} className="space-y-1">
+                <label className="flex items-center gap-1 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(checked)}
+                    onChange={(event) =>
+                      controller.updateParams(
+                        { [input.name]: event.target.checked },
+                        { markDirty: true }
+                      )
+                    }
+                    disabled={!controller.effectiveCanEdit}
+                  />
+                  {input.label}
+                  {input.required ? ' *' : ''}
+                </label>
+                {missing ? (
+                  <p className="text-xs text-red-500">Required</p>
+                ) : null}
+              </div>
+            )
+          }
+
+          if (input.type === 'string[]') {
+            const rawValue = controller.params?.[input.name]
+            const formatted = formatManifestInputValue('string[]', rawValue)
+            const value = typeof formatted === 'string' ? formatted : ''
+
+            return (
+              <div key={input.name} className="space-y-1">
+                <label className="block text-[10px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                  {input.label}
+                  {input.required ? ' *' : ''}
+                </label>
+                <NodeInputField
+                  value={value}
+                  placeholder="value1, value2"
+                  onChange={(nextValue) => {
+                    const parsed = parseManifestInputValue(
+                      'string[]',
+                      nextValue
+                    )
+                    controller.updateParams(
+                      { [input.name]: parsed.value },
+                      { markDirty: true }
+                    )
+                  }}
+                  disabled={!controller.effectiveCanEdit}
+                />
+                {missing ? (
+                  <p className="text-xs text-red-500">Required</p>
+                ) : null}
+              </div>
+            )
+          }
+
+          if (input.type === 'object') {
+            const rawValue = controller.params?.[input.name]
+
+            return (
+              <div key={input.name} className="space-y-1">
+                <label className="block text-[10px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                  {input.label}
+                  {input.required ? ' *' : ''}
+                </label>
+                <ManifestObjectInput
+                  value={rawValue}
+                  onChange={(nextValue) =>
+                    controller.updateParams(
+                      { [input.name]: nextValue },
+                      { markDirty: true }
+                    )
+                  }
+                  disabled={!controller.effectiveCanEdit}
+                />
+                {missing ? (
+                  <p className="text-xs text-red-500">Required</p>
+                ) : null}
+              </div>
+            )
+          }
+
           // Default text input handling for other types
           const rawValue = controller.params?.[input.name]
-          const value =
-            typeof rawValue === 'string'
-              ? rawValue
-              : rawValue == null
-                ? ''
-                : String(rawValue)
-          const missing = input.required && value.trim().length === 0
+          const formatted = formatManifestInputValue('string', rawValue)
+          const value = typeof formatted === 'string' ? formatted : ''
           return (
             <div key={input.name} className="space-y-1">
               <label className="block text-[10px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
