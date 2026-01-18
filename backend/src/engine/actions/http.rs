@@ -4,6 +4,7 @@ use std::time::Duration;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::redirect;
 use serde_json::{json, Value};
+use tracing::debug;
 
 use crate::engine::actions::registry::{ActionExecutionSemantics, ActionManifest, ActionValidator};
 use crate::engine::actions::validate_required_fields;
@@ -128,16 +129,30 @@ pub(crate) async fn execute_http(
         .and_then(|v| v.as_str())
         .ok_or_else(|| "HTTP url is required".to_string())?;
 
+    let url_is_templated = url_raw.contains("{{");
     let url_rendered = templ_str(url_raw, context);
+    let url_rendered = url_rendered.trim().to_string();
 
-    let parsed =
-        reqwest::Url::parse(&url_rendered).map_err(|e| format!("Invalid rendered URL: {}", e))?;
-
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Err("Only http/https schemes are allowed".to_string());
+    if url_is_templated && url_rendered.is_empty() {
+        return Err("HTTP URL template resolved empty".to_string());
     }
 
-    let host = parsed.host_str().unwrap_or("").to_lowercase();
+    if url_rendered.is_empty() {
+        return Err("HTTP url is required".to_string());
+    }
+
+    let mut url_parsed =
+        reqwest::Url::parse(&url_rendered).map_err(|e| format!("Invalid rendered URL: {}", e))?;
+
+    if !url_parsed.has_host() {
+        return Err("HTTP URL must be absolute".to_string());
+    }
+
+    if !matches!(url_parsed.scheme(), "http" | "https") {
+        return Err("HTTP URL scheme must be http or https".to_string());
+    }
+
+    let host = url_parsed.host_str().unwrap_or("").to_lowercase();
     let allowed: Vec<String> = allowed_hosts.to_vec();
 
     // ---- SSRF / egress validation ----
@@ -160,7 +175,7 @@ pub(crate) async fn execute_http(
         return Err(msg);
     }
 
-    if let Some(ip) = parsed.host_str().and_then(|h| h.parse::<IpAddr>().ok()) {
+    if let Some(ip) = url_parsed.host_str().and_then(|h| h.parse::<IpAddr>().ok()) {
         if is_prod && is_ip_blocked(&ip) {
             let msg = "Outbound HTTP blocked by SSRF hardening".to_string();
             let _ = state
@@ -218,11 +233,38 @@ pub(crate) async fn execute_http(
 
     // ---- Resolve method / options ----
 
-    let method = params
+    let method_raw = params
         .get("method")
         .and_then(|v| v.as_str())
         .or_else(|| manifest_http.get("method").and_then(|v| v.as_str()))
-        .unwrap_or("GET");
+        .unwrap_or("");
+
+    let method_is_templated = method_raw.contains("{{");
+    let method_candidate = if method_is_templated {
+        let rendered = templ_str(method_raw, context);
+        let rendered = rendered.trim();
+        if rendered.is_empty() {
+            return Err("HTTP method template resolved empty".to_string());
+        }
+        rendered.to_string()
+    } else {
+        method_raw.trim().to_string()
+    };
+
+    let method = if method_candidate.is_empty() {
+        "GET".to_string()
+    } else {
+        let normalized = method_candidate.to_ascii_uppercase();
+        match normalized.as_str() {
+            "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" => normalized,
+            _ => {
+                return Err(format!(
+                    "HTTP method `{}` is not supported",
+                    method_candidate
+                ));
+            }
+        }
+    };
 
     let body_type = params
         .get("bodyType")
@@ -251,6 +293,23 @@ pub(crate) async fn execute_http(
         .get("retries")
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as usize;
+
+    let allowlist_mode = if default_deny {
+        "default_deny"
+    } else if allowed.is_empty() {
+        "allow_all"
+    } else {
+        "allowlist"
+    };
+
+    debug!(
+        actionType = "http",
+        node_id = %node.id,
+        rendered_method = %method,
+        rendered_url_host = %host,
+        allowlist_mode = %allowlist_mode,
+        "HTTP action resolved inputs."
+    );
 
     // ---- Redirect policy ----
 
@@ -329,7 +388,6 @@ pub(crate) async fn execute_http(
 
     // ---- Query params ----
 
-    let mut url_parsed = parsed.clone();
     let query_source = params
         .get("queryParams")
         .and_then(|v| v.as_array())
@@ -354,13 +412,19 @@ pub(crate) async fn execute_http(
     loop {
         attempt += 1;
 
-        let mut req = match method {
+        let mut req = match method.as_str() {
+            "GET" => client.get(url_parsed.clone()),
             "POST" => client.post(url_parsed.clone()),
             "PUT" => client.put(url_parsed.clone()),
             "PATCH" => client.patch(url_parsed.clone()),
             "DELETE" => client.delete(url_parsed.clone()),
             "HEAD" => client.head(url_parsed.clone()),
-            _ => client.get(url_parsed.clone()),
+            _ => {
+                return Err(format!(
+                    "HTTP method `{}` is not supported",
+                    method
+                ));
+            }
         }
         .headers(headers.clone());
 
@@ -383,7 +447,7 @@ pub(crate) async fn execute_http(
             _ => req,
         };
 
-        if !matches!(method, "GET" | "DELETE" | "HEAD") {
+        if !matches!(method.as_str(), "GET" | "DELETE" | "HEAD") {
             match body_type {
                 "json" => {
                     let body_raw = params

@@ -57,3 +57,4 @@
 - Normalized action error strings to ASCII (Settings -> Integrations) to fix encoding corruption.
 - Added startup-loaded JSON action manifests that map to existing executors so new HTTP action nodes can be registered without new Rust action modules.
 - Added an action manifest registry accessor so routes can expose a read-only action catalog without touching executor logic.
+- Tightened HTTP action templating so methods and URLs render/validate explicitly, and added a debug log for resolved method/host with allowlist mode.
