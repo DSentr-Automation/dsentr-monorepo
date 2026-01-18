@@ -61,3 +61,10 @@ itly coordinated.
 - Update github backend build to push to a docker dev repo
 - Added compile-time embedded action manifests so new action nodes can be added via JSON without new executor code.
 - Fixed HTTP egress validation to only check manifest-defined destinations (node.data.http.url) and ignore payload data (params.url), preventing false rejections when actions process URLs as data.
+
+## Engine invariant
+
+- Action manifests are declarative only; they do not support expressions or branching logic.
+- HTTP action `method` and `url` may be templated but must resolve to non-empty values at runtime.
+- Legacy `node.data.inputs` are merged into `params` for templating, with `params` taking precedence.
+- Workflow egress allowlists must contain hostnames only; schemes, paths, queries, fragments, and ports are rejected before runtime.
