@@ -1466,7 +1466,7 @@ function FlyoutActionFields({
       case 'update':
         executionParams = {
           _method: 'PUT',
-          _url: `https://api.raindrop.io/rest/v1/raindrop/{{params.bookmark_id}}`,
+          _url: `https://api.raindrop.io/rest/v1/raindrop/${controller.params.bookmark_id}`,
           _body: {
             title: readParamString(controller.params?.title),
             tags: readParamString(controller.params?.tags),
@@ -1477,7 +1477,7 @@ function FlyoutActionFields({
       case 'delete':
         executionParams = {
           _method: 'DELETE',
-          _url: `https://api.raindrop.io/rest/v1/raindrop/{{params.bookmark_id}}`,
+          _url: `https://api.raindrop.io/rest/v1/raindrop/${controller.params.bookmark_id}`,
           _body: ''
         }
         break
