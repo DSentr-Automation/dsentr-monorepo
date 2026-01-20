@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use thiserror::Error;
 use time::{Duration, OffsetDateTime};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::config::{GitHubAppSettings, OAuthProviderConfig, OAuthSettings};
@@ -1263,7 +1263,7 @@ impl OAuthAccountService {
             verified: Option<bool>,
         }
 
-        let response: TokenResponse = self
+        let resp = self
             .client
             .post(self.github_token_url())
             .header(reqwest::header::ACCEPT, "application/json")
@@ -1274,10 +1274,29 @@ impl OAuthAccountService {
                 ("redirect_uri", self.github.redirect_uri.as_str()),
             ])
             .send()
-            .await?
-            .error_for_status()?
-            .json()
             .await?;
+
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            error!(
+                %status,
+                %text,
+                "GitHub OAuth token exchange failed"
+            );
+            return Err(OAuthAccountError::InvalidResponse(text));
+        }
+
+        let response: TokenResponse = serde_json::from_str(&text).map_err(|err| {
+            error!(
+                %status,
+                body = %text,
+                ?err,
+                "GitHub OAuth token exchange returned non-JSON"
+            );
+            OAuthAccountError::InvalidResponse(text)
+        })?;
 
         let refresh_token = response.refresh_token.unwrap_or_default();
         if self.github_app.user_token_refresh_enabled && refresh_token.trim().is_empty() {
