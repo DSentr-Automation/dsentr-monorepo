@@ -447,17 +447,18 @@ pub(crate) async fn execute_http(
         if !matches!(method.as_str(), "GET" | "DELETE" | "HEAD") {
             match body_type {
                 "json" => {
-                    let body_raw = params
-                        .get("body")
-                        .and_then(|v| v.as_str())
-                        .or_else(|| manifest_http.get("body").and_then(|v| v.as_str()))
-                        .unwrap_or("");
-                    let body = templ_str(body_raw, context);
-                    if !body.is_empty() {
-                        if let Ok(json) = serde_json::from_str::<Value>(&body) {
+                    if let Some(body_value) = params.get("body") {
+                        // Prefer params.body as JSON
+                        req = req.json(body_value);
+                    } else if let Some(body_template) =
+                        manifest_http.get("body").and_then(|v| v.as_str())
+                    {
+                        let rendered = templ_str(body_template, context);
+                        if !rendered.trim().is_empty() {
+                            let json: Value = serde_json::from_str(&rendered).map_err(|_| {
+                                "HTTP json body template did not resolve to valid JSON"
+                            })?;
                             req = req.json(&json);
-                        } else {
-                            req = req.body(body);
                         }
                     }
                 }
