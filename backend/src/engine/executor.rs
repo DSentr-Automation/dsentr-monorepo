@@ -9,6 +9,7 @@ use tokio::time::{sleep, timeout, Instant};
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
+use super::actions::github::hydrate_github_params;
 use super::actions::registry::{
     ActionExecutionResult, ActionExecutionSemantics, ActionRegistry, ActionRuntimeContext,
 };
@@ -415,6 +416,7 @@ pub(crate) async fn execute_run(
         let Some(node) = graph.nodes.get(&node_id) else {
             continue;
         };
+        let mut node = node.clone();
         let kind = node.kind.as_str();
 
         let running = state
@@ -466,8 +468,23 @@ pub(crate) async fn execute_run(
             }
         }
 
+        let mut params_for_context = merged_node_params(&node);
+        let mut hydration_error = None;
+        if is_github_action(&node) {
+            match hydrate_github_params(&mut params_for_context) {
+                Ok(()) => {
+                    if let Err(err) = set_node_params(&mut node, params_for_context.clone()) {
+                        hydration_error = Some(err);
+                    }
+                }
+                Err(err) => {
+                    hydration_error = Some(err);
+                }
+            }
+        }
+
         // Merge node inputs/params into templating context.
-        enhanced_context.insert("params".to_string(), merged_node_params(node));
+        enhanced_context.insert("params".to_string(), params_for_context);
 
         let context_value = Value::Object(enhanced_context);
         let node_label = node
@@ -491,44 +508,48 @@ pub(crate) async fn execute_run(
             .unwrap_or(false);
 
         let execution: Result<(ActionExecutionSemantics, ActionExecutionResult), (String, bool)> =
-            async {
-                let action = action_registry.resolve(node).map_err(|err| (err, true))?;
-                action
-                    .validator
-                    .validate(node)
-                    .map_err(|err| (err, false))?;
+            if let Some(err) = hydration_error {
+                Err((err, false))
+            } else {
+                async {
+                    let action = action_registry.resolve(&node).map_err(|err| (err, true))?;
+                    action
+                        .validator
+                        .validate(&node)
+                        .map_err(|err| (err, false))?;
 
-                let runtime = ActionRuntimeContext {
-                    node,
-                    context: &context_value,
-                    allowed_hosts: &allowed_hosts,
-                    disallowed_hosts: &disallowed_hosts,
-                    default_deny,
-                    is_prod,
-                    state: &state,
-                    run: &run,
-                };
+                    let runtime = ActionRuntimeContext {
+                        node: &node,
+                        context: &context_value,
+                        allowed_hosts: &allowed_hosts,
+                        disallowed_hosts: &disallowed_hosts,
+                        default_deny,
+                        is_prod,
+                        state: &state,
+                        run: &run,
+                    };
 
-                let result = action
-                    .executor
-                    .execute(runtime)
-                    .await
-                    .map_err(|err| (err, false))?;
-                if matches!(result, ActionExecutionResult::Pause { .. })
-                    && action.semantics != ActionExecutionSemantics::Resumable
-                {
-                    return Err((
-                        format!(
-                            "Action `{}` returned a pause but is not resumable",
-                            action.action_type
-                        ),
-                        true,
-                    ));
+                    let result = action
+                        .executor
+                        .execute(runtime)
+                        .await
+                        .map_err(|err| (err, false))?;
+                    if matches!(result, ActionExecutionResult::Pause { .. })
+                        && action.semantics != ActionExecutionSemantics::Resumable
+                    {
+                        return Err((
+                            format!(
+                                "Action `{}` returned a pause but is not resumable",
+                                action.action_type
+                            ),
+                            true,
+                        ));
+                    }
+
+                    Ok((action.semantics, result))
                 }
-
-                Ok((action.semantics, result))
-            }
-            .await;
+                .await
+            };
 
         match execution {
             Ok((
@@ -558,7 +579,7 @@ pub(crate) async fn execute_run(
                 // original-cased label and a lowercase alias (for backward
                 // compatibility with existing templates that used lowercased
                 // node names). Field/property casing remains respected.
-                let (primary_key, alias_key) = context_keys(node);
+                let (primary_key, alias_key) = context_keys(&node);
                 context.insert(primary_key, outputs.clone());
                 if let Some(alias) = alias_key {
                     // If an alias exists and differs from the primary key, also insert it
@@ -597,7 +618,7 @@ pub(crate) async fn execute_run(
                         .await;
                 }
 
-                let (primary_key, alias_key) = context_keys(node);
+                let (primary_key, alias_key) = context_keys(&node);
                 context.insert(primary_key, outputs.clone());
                 if let Some(alias) = alias_key {
                     context.insert(alias, outputs.clone());
@@ -888,6 +909,22 @@ fn merged_node_params(node: &Node) -> Value {
         }
     }
     Value::Object(merged)
+}
+
+fn is_github_action(node: &Node) -> bool {
+    node.data
+        .get("actionType")
+        .and_then(|v| v.as_str())
+        .map(|value| value.eq_ignore_ascii_case("github.action"))
+        .unwrap_or(false)
+}
+
+fn set_node_params(node: &mut Node, params: Value) -> Result<(), String> {
+    let Some(data) = node.data.as_object_mut() else {
+        return Err("Node data must be an object".to_string());
+    };
+    data.insert("params".to_string(), params);
+    Ok(())
 }
 
 fn parse_host_list(raw: &str) -> Vec<String> {
@@ -1575,6 +1612,78 @@ mod tests {
                     "_method": "POST",
                     "_url": server.url("/repos/octo/example/issues"),
                     "_body": issue_body
+                }
+            }),
+        );
+        hydrate_http_manifest(&mut run.snapshot, "github.action");
+
+        let graph = Graph::from_snapshot(&run.snapshot).expect("graph should build");
+        let node = graph.nodes.get("node-1").expect("node should exist");
+        let mut context = Map::new();
+        context.insert("params".to_string(), merged_node_params(node));
+        context.insert(
+            "connection".to_string(),
+            json!({
+                "access_token": "github-token"
+            }),
+        );
+        let context_value = Value::Object(context);
+
+        let state = build_state(MockWorkflowRepository::new());
+        let executor = HttpExecutor;
+        let runtime = ActionRuntimeContext {
+            node,
+            context: &context_value,
+            allowed_hosts: &[],
+            disallowed_hosts: &[],
+            default_deny: false,
+            is_prod: false,
+            state: &state,
+            run: &run,
+        };
+
+        let result = executor.execute(runtime).await.expect("http should run");
+        let outputs = match result {
+            ActionExecutionResult::Immediate { outputs, .. } => outputs,
+            _ => panic!("expected immediate result"),
+        };
+
+        mock.assert();
+        assert_eq!(outputs.get("status").and_then(|v| v.as_u64()), Some(201));
+    }
+
+    #[tokio::test]
+    async fn github_action_body_input_prefers_hydrated_payload() {
+        let server = MockServer::start();
+        let expected_body = json!({
+            "title": "Bug report",
+            "body": "Expected body"
+        });
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/repos/octo/example/issues")
+                .header("authorization", "Bearer github-token")
+                .json_body(expected_body.clone());
+            then.status(201).json_body(json!({"id": 1}));
+        });
+
+        let mut run = base_run(
+            "action",
+            json!( {
+                "label": "GitHub",
+                "actionType": "github.action",
+                "inputs": {
+                    "operation": "create_issue",
+                    "owner": "octo",
+                    "repo": "example",
+                    "title": "Bug report",
+                    "body": "Expected body"
+                },
+                "params": {
+                    "_method": "POST",
+                    "_url": server.url("/repos/octo/example/issues"),
+                    "_body": expected_body,
+                    "body": "RAW BODY"
                 }
             }),
         );

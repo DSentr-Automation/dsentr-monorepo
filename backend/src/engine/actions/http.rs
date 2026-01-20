@@ -121,12 +121,25 @@ pub(crate) async fn execute_http(
     let params = node.data.get("params").cloned().unwrap_or(Value::Null);
 
     let manifest_http = node.data.get("http").cloned().unwrap_or(Value::Null);
+    let has_manifest_http = manifest_http.is_object();
 
-    // ---- Resolve URL (manifest only) ----
+    // ---- Resolve URL ----
 
-    let url_raw = manifest_http
-        .get("url")
+    // Prefer internal _method/_url/_body overrides; otherwise use manifest defaults (fallback to raw
+    // params only for the standalone HTTP action with no manifest data).
+    let url_raw = params
+        .get("_url")
         .and_then(|v| v.as_str())
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .or_else(|| manifest_http.get("url").and_then(|v| v.as_str()))
+        .or_else(|| {
+            if has_manifest_http {
+                None
+            } else {
+                params.get("url").and_then(|v| v.as_str())
+            }
+        })
         .ok_or_else(|| "HTTP url is required".to_string())?;
 
     let url_is_templated = url_raw.contains("{{");
@@ -234,9 +247,18 @@ pub(crate) async fn execute_http(
     // ---- Resolve method / options ----
 
     let method_raw = params
-        .get("method")
+        .get("_method")
         .and_then(|v| v.as_str())
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
         .or_else(|| manifest_http.get("method").and_then(|v| v.as_str()))
+        .or_else(|| {
+            if has_manifest_http {
+                None
+            } else {
+                params.get("method").and_then(|v| v.as_str())
+            }
+        })
         .unwrap_or("");
 
     let method_is_templated = method_raw.contains("{{");
@@ -447,9 +469,17 @@ pub(crate) async fn execute_http(
         if !matches!(method.as_str(), "GET" | "DELETE" | "HEAD") {
             match body_type {
                 "json" => {
-                    if let Some(body_value) = params.get("body") {
-                        // Prefer params.body as JSON
-                        req = req.json(body_value);
+                    if let Some(body_value) = params.get("_body").filter(|value| !value.is_null()) {
+                        let json_value = match body_value {
+                            Value::String(raw) => {
+                                serde_json::from_str::<Value>(raw).map_err(|_| {
+                                    "HTTP json _body override did not resolve to valid JSON"
+                                        .to_string()
+                                })?
+                            }
+                            other => other.clone(),
+                        };
+                        req = req.json(&json_value);
                     } else if let Some(body_template) =
                         manifest_http.get("body").and_then(|v| v.as_str())
                     {
@@ -459,6 +489,10 @@ pub(crate) async fn execute_http(
                                 "HTTP json body template did not resolve to valid JSON"
                             })?;
                             req = req.json(&json);
+                        }
+                    } else if !has_manifest_http {
+                        if let Some(body_value) = params.get("body") {
+                            req = req.json(body_value);
                         }
                     }
                 }

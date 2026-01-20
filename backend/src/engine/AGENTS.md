@@ -45,3 +45,5 @@
 - Executor test configs now include GitHub OAuth settings so Config stubs match the expanded provider list.
 - Executor test configs now include GitHub App settings so GitHub App invariants remain wired in engine fixtures.
 - Added HTTP executor tests for GitHub action manifests to cover bearer auth headers and 204 workflow dispatch responses.
+- Executor now hydrates GitHub action parameters into concrete HTTP method, URL, and body data before execution.
+- HTTP executor payload fields must never be sourced directly from user inputs without an action-specific translation layer.

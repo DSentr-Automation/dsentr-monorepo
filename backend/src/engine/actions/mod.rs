@@ -3,6 +3,7 @@ mod code;
 pub(crate) mod delay;
 mod email;
 pub(crate) mod formatter;
+pub(crate) mod github;
 mod google;
 mod http;
 mod manifest;
