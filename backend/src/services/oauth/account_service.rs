@@ -9,7 +9,7 @@ use time::{Duration, OffsetDateTime};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::config::{OAuthProviderConfig, OAuthSettings};
+use crate::config::{GitHubAppSettings, OAuthProviderConfig, OAuthSettings};
 use crate::db::oauth_token_repository::{NewUserOAuthToken, UserOAuthTokenRepository};
 #[cfg(test)]
 use crate::db::postgres_oauth_token_repository::PostgresUserOAuthTokenRepository;
@@ -28,6 +28,9 @@ use sqlx::{query, Row};
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_USERINFO_URL: &str = "https://openidconnect.googleapis.com/v1/userinfo";
 const GOOGLE_REVOCATION_URL: &str = "https://oauth2.googleapis.com/revoke";
+const GITHUB_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
+const GITHUB_USERINFO_URL: &str = "https://api.github.com/user";
+const GITHUB_EMAILS_URL: &str = "https://api.github.com/user/emails";
 const MICROSOFT_TOKEN_URL: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
 const MICROSOFT_USERINFO_URL: &str = "https://graph.microsoft.com/v1.0/me";
 const MICROSOFT_REVOCATION_URL: &str =
@@ -154,6 +157,8 @@ pub struct OAuthAccountService {
     encryption_key: Arc<Vec<u8>>,
     client: Arc<Client>,
     google: OAuthProviderConfig,
+    github: OAuthProviderConfig,
+    github_app: GitHubAppSettings,
     microsoft: OAuthProviderConfig,
     slack: OAuthProviderConfig,
     asana: OAuthProviderConfig,
@@ -175,6 +180,7 @@ impl OAuthAccountService {
         encryption_key: Arc<Vec<u8>>,
         client: Arc<Client>,
         settings: &OAuthSettings,
+        github_app: &GitHubAppSettings,
     ) -> Self {
         Self {
             repo,
@@ -182,6 +188,8 @@ impl OAuthAccountService {
             encryption_key,
             client,
             google: settings.google.clone(),
+            github: settings.github.clone(),
+            github_app: github_app.clone(),
             microsoft: settings.microsoft.clone(),
             slack: settings.slack.clone(),
             asana: settings.asana.clone(),
@@ -234,6 +242,45 @@ impl OAuthAccountService {
     #[cfg(not(test))]
     fn google_revocation_url(&self) -> &str {
         GOOGLE_REVOCATION_URL
+    }
+
+    #[cfg(test)]
+    fn github_token_url(&self) -> &str {
+        self.endpoint_overrides
+            .github_token_url
+            .as_deref()
+            .unwrap_or(GITHUB_TOKEN_URL)
+    }
+
+    #[cfg(not(test))]
+    fn github_token_url(&self) -> &str {
+        GITHUB_TOKEN_URL
+    }
+
+    #[cfg(test)]
+    fn github_userinfo_url(&self) -> &str {
+        self.endpoint_overrides
+            .github_userinfo_url
+            .as_deref()
+            .unwrap_or(GITHUB_USERINFO_URL)
+    }
+
+    #[cfg(not(test))]
+    fn github_userinfo_url(&self) -> &str {
+        GITHUB_USERINFO_URL
+    }
+
+    #[cfg(test)]
+    fn github_emails_url(&self) -> &str {
+        self.endpoint_overrides
+            .github_emails_url
+            .as_deref()
+            .unwrap_or(GITHUB_EMAILS_URL)
+    }
+
+    #[cfg(not(test))]
+    fn github_emails_url(&self) -> &str {
+        GITHUB_EMAILS_URL
     }
 
     #[cfg(test)]
@@ -313,6 +360,18 @@ impl OAuthAccountService {
     }
 
     #[cfg(test)]
+    pub fn set_github_endpoint_overrides(
+        &mut self,
+        token_url: impl Into<String>,
+        userinfo_url: impl Into<String>,
+        emails_url: impl Into<String>,
+    ) {
+        self.endpoint_overrides.github_token_url = Some(token_url.into());
+        self.endpoint_overrides.github_userinfo_url = Some(userinfo_url.into());
+        self.endpoint_overrides.github_emails_url = Some(emails_url.into());
+    }
+
+    #[cfg(test)]
     pub fn set_slack_endpoint_overrides(
         &mut self,
         token_url: impl Into<String>,
@@ -332,6 +391,13 @@ impl OAuthAccountService {
         // caller's verified email address. The Sheets scope is required by workflow actions that
         // append rows via the Google Sheets API.
         "openid email https://www.googleapis.com/auth/spreadsheets"
+    }
+
+    pub fn github_scopes(&self) -> &'static str {
+        // GitHub OAuth tokens are user-to-server only; installation tokens are not implemented.
+        // Workflow actions currently use user tokens. Webhook handling will be installation-scoped
+        // in a future phase.
+        "read:user user:email repo workflow"
     }
 
     pub fn microsoft_scopes(&self) -> &'static str {
@@ -1027,6 +1093,7 @@ impl OAuthAccountService {
     ) -> Result<AuthorizationTokens, OAuthAccountError> {
         match provider {
             ConnectedOAuthProvider::Google => self.exchange_google_code(code).await,
+            ConnectedOAuthProvider::GitHub => self.exchange_github_code(code).await,
             ConnectedOAuthProvider::Microsoft => self.exchange_microsoft_code(code).await,
             ConnectedOAuthProvider::Slack => {
                 let auth = self.exchange_slack_code(code).await?;
@@ -1163,6 +1230,146 @@ impl OAuthAccountService {
                 .sub
                 .as_deref()
                 .and_then(normalize_provider_user_id),
+            slack: None,
+            notion: None,
+        })
+    }
+
+    async fn exchange_github_code(
+        &self,
+        code: &str,
+    ) -> Result<AuthorizationTokens, OAuthAccountError> {
+        // GitHub OAuth tokens represent user identity only. Installation tokens are handled
+        // separately in a future phase.
+        #[derive(Deserialize)]
+        struct TokenResponse {
+            access_token: String,
+            #[serde(default)]
+            refresh_token: Option<String>,
+            expires_in: Option<i64>,
+        }
+
+        #[derive(Deserialize)]
+        struct GitHubUserResponse {
+            login: Option<String>,
+            id: Option<u64>,
+            email: Option<String>,
+        }
+
+        #[derive(Deserialize)]
+        struct GitHubEmailResponse {
+            email: Option<String>,
+            primary: Option<bool>,
+            verified: Option<bool>,
+        }
+
+        let response: TokenResponse = self
+            .client
+            .post(self.github_token_url())
+            .header(reqwest::header::ACCEPT, "application/json")
+            .form(&[
+                ("client_id", self.github.client_id.as_str()),
+                ("client_secret", self.github.client_secret.as_str()),
+                ("code", code),
+                ("redirect_uri", self.github.redirect_uri.as_str()),
+            ])
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
+        let refresh_token = response.refresh_token.unwrap_or_default();
+        if self.github_app.user_token_refresh_enabled && refresh_token.trim().is_empty() {
+            warn!(
+                provider = "github",
+                "GitHub App user OAuth refresh is enabled but the token exchange returned no refresh_token"
+            );
+        }
+        let expires_at = if let Some(expires_in) = response.expires_in {
+            OffsetDateTime::now_utc() + Duration::seconds(expires_in)
+        } else {
+            OffsetDateTime::now_utc()
+                .replace_year(2124)
+                .expect("valid far-future timestamp")
+        };
+
+        let user_info: GitHubUserResponse = self
+            .client
+            .get(self.github_userinfo_url())
+            .bearer_auth(&response.access_token)
+            .header("User-Agent", "dsentr")
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
+        let login = user_info
+            .login
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string());
+        let email_from_user = user_info
+            .email
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string());
+
+        let email_from_api = match self
+            .client
+            .get(self.github_emails_url())
+            .bearer_auth(&response.access_token)
+            .header("User-Agent", "dsentr")
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                let status = resp.status();
+                if status.is_success() {
+                    let emails: Vec<GitHubEmailResponse> = resp
+                        .json()
+                        .await
+                        .map_err(|err| OAuthAccountError::InvalidResponse(err.to_string()))?;
+                    emails
+                        .iter()
+                        .find(|email| email.primary == Some(true) && email.verified == Some(true))
+                        .and_then(|email| email.email.as_deref())
+                        .map(|email| email.to_string())
+                } else {
+                    warn!(
+                        status = %status,
+                        "GitHub email lookup returned non-success status"
+                    );
+                    None
+                }
+            }
+            Err(err) => {
+                warn!(?err, "GitHub email lookup failed");
+                None
+            }
+        };
+
+        let account_label = normalize_account_label(
+            ConnectedOAuthProvider::GitHub,
+            email_from_api.or(email_from_user),
+            login.as_deref(),
+        );
+        let provider_user_id = user_info
+            .id
+            .map(|id| id.to_string())
+            .as_deref()
+            .and_then(normalize_provider_user_id)
+            .or_else(|| login.as_deref().and_then(normalize_provider_user_id));
+
+        Ok(AuthorizationTokens {
+            access_token: response.access_token,
+            refresh_token,
+            expires_at,
+            account_email: account_label,
+            provider_user_id,
             slack: None,
             notion: None,
         })
@@ -1669,7 +1876,8 @@ impl OAuthAccountService {
             expires_at,
             account_email: normalize_account_label(
                 ConnectedOAuthProvider::Bitly,
-                login.clone().unwrap_or_else(|| "Bitly".to_string()),
+                login.clone().or_else(|| Some("Bitly".to_string())),
+                None,
             ),
             provider_user_id: login.as_deref().and_then(normalize_provider_user_id),
             slack: None,
@@ -1779,6 +1987,7 @@ impl OAuthAccountService {
         }
         match provider {
             ConnectedOAuthProvider::Google => self.refresh_google_token(refresh_token).await,
+            ConnectedOAuthProvider::GitHub => self.refresh_github_token(refresh_token).await,
             ConnectedOAuthProvider::Microsoft => self.refresh_microsoft_token(refresh_token).await,
             ConnectedOAuthProvider::Slack => self.refresh_slack_token(refresh_token).await,
             ConnectedOAuthProvider::Asana => self.refresh_asana_token(refresh_token).await,
@@ -1846,6 +2055,79 @@ impl OAuthAccountService {
         Ok(AuthorizationTokens {
             access_token: response.access_token,
             refresh_token: new_refresh,
+            expires_at,
+            account_email: String::new(),
+            provider_user_id: None,
+            slack: None,
+            notion: None,
+        })
+    }
+
+    async fn refresh_github_token(
+        &self,
+        refresh_token: &str,
+    ) -> Result<AuthorizationTokens, OAuthAccountError> {
+        if refresh_token.trim().is_empty() || !self.github_app.user_token_refresh_enabled {
+            return Err(OAuthAccountError::RefreshNotSupported {
+                provider: ConnectedOAuthProvider::GitHub,
+            });
+        }
+
+        #[derive(Deserialize)]
+        struct TokenResponse {
+            access_token: String,
+            expires_in: Option<i64>,
+            #[serde(default)]
+            refresh_token: Option<String>,
+        }
+
+        let response = self
+            .client
+            .post(self.github_token_url())
+            .header(reqwest::header::ACCEPT, "application/json")
+            .form(&[
+                ("client_id", self.github.client_id.as_str()),
+                ("client_secret", self.github.client_secret.as_str()),
+                ("refresh_token", refresh_token),
+                ("grant_type", "refresh_token"),
+            ])
+            .send()
+            .await?;
+
+        if let Err(err) = response.error_for_status_ref() {
+            let body = response.text().await.unwrap_or_default();
+            if is_revocation_signal(err.status(), &body) {
+                warn!(
+                    provider = "github",
+                    status = ?err.status(),
+                    body = %body,
+                    "github oauth refresh token revoked"
+                );
+                return Err(OAuthAccountError::TokenRevoked {
+                    provider: ConnectedOAuthProvider::GitHub,
+                });
+            }
+            return Err(OAuthAccountError::Http(err));
+        }
+
+        let response: TokenResponse = response
+            .json()
+            .await
+            .map_err(|err| OAuthAccountError::InvalidResponse(err.to_string()))?;
+
+        let expires_at = if let Some(expires_in) = response.expires_in {
+            OffsetDateTime::now_utc() + Duration::seconds(expires_in)
+        } else {
+            OffsetDateTime::now_utc()
+                .replace_year(2124)
+                .expect("valid far-future timestamp")
+        };
+
+        Ok(AuthorizationTokens {
+            access_token: response.access_token,
+            refresh_token: response
+                .refresh_token
+                .unwrap_or_else(|| refresh_token.to_string()),
             expires_at,
             account_email: String::new(),
             provider_user_id: None,
@@ -2257,6 +2539,7 @@ impl OAuthAccountService {
                     )))
                 }
             }
+            ConnectedOAuthProvider::GitHub => Ok(()),
             ConnectedOAuthProvider::Microsoft => {
                 let response = self
                     .client
@@ -2722,6 +3005,11 @@ impl OAuthAccountService {
                 client_secret: "stub".into(),
                 redirect_uri: "http://localhost".into(),
             },
+            github: OAuthProviderConfig {
+                client_id: "stub".into(),
+                client_secret: "stub".into(),
+                redirect_uri: "http://localhost".into(),
+            },
             microsoft: OAuthProviderConfig {
                 client_id: "stub".into(),
                 client_secret: "stub".into(),
@@ -2760,6 +3048,7 @@ impl OAuthAccountService {
             key,
             client,
             &settings,
+            &crate::config::GitHubAppSettings::default(),
         ))
     }
 }
@@ -2948,15 +3237,34 @@ pub(crate) fn is_revocation_signal(status: Option<StatusCode>, body: &str) -> bo
     lowered.contains("invalid_grant") || lowered.contains("token revoked")
 }
 
-fn normalize_account_label(provider: ConnectedOAuthProvider, account_email: String) -> String {
+fn normalize_account_label(
+    provider: ConnectedOAuthProvider,
+    account_email: Option<String>,
+    username: Option<&str>,
+) -> String {
+    let base = match provider {
+        ConnectedOAuthProvider::GitHub => username
+            .and_then(normalize_provider_user_id)
+            .or_else(|| {
+                account_email
+                    .as_deref()
+                    .and_then(normalize_provider_user_id)
+            })
+            .unwrap_or_else(|| "GitHub".to_string()),
+        _ => account_email
+            .as_deref()
+            .and_then(normalize_provider_user_id)
+            .unwrap_or_else(|| match provider {
+                ConnectedOAuthProvider::Bitly => "Bitly".to_string(),
+                ConnectedOAuthProvider::Raindrop => "Raindrop".to_string(),
+                _ => "OAuth account".to_string(),
+            }),
+    };
+
     match provider {
-        ConnectedOAuthProvider::Bitly => {
-            format!("{account_email} (Bitly account)")
-        }
-        ConnectedOAuthProvider::Raindrop => {
-            format!("{account_email} (Raindrop account)")
-        }
-        _ => account_email,
+        ConnectedOAuthProvider::Bitly => format!("{base} (Bitly account)"),
+        ConnectedOAuthProvider::Raindrop => format!("{base} (Raindrop account)"),
+        _ => base,
     }
 }
 
@@ -2975,6 +3283,9 @@ struct TestEndpointOverrides {
     google_token_url: Option<String>,
     google_userinfo_url: Option<String>,
     google_revocation_url: Option<String>,
+    github_token_url: Option<String>,
+    github_userinfo_url: Option<String>,
+    github_emails_url: Option<String>,
     slack_token_url: Option<String>,
     slack_userinfo_url: Option<String>,
     notion_token_url: Option<String>,
@@ -3275,6 +3586,12 @@ mod tests {
                 client_secret: "secret".into(),
                 redirect_uri: "http://localhost".into(),
             },
+
+            github: OAuthProviderConfig {
+                client_id: "id".into(),
+                client_secret: "secret".into(),
+                redirect_uri: "http://localhost".into(),
+            },
             microsoft: OAuthProviderConfig {
                 client_id: "id".into(),
                 client_secret: "secret".into(),
@@ -3307,7 +3624,14 @@ mod tests {
             },
             token_encryption_key: vec![0u8; 32],
         };
-        let service = OAuthAccountService::new(repo, workspace_repo, key, client, &settings);
+        let service = OAuthAccountService::new(
+            repo,
+            workspace_repo,
+            key,
+            client,
+            &settings,
+            &crate::config::GitHubAppSettings::default(),
+        );
         assert_eq!(
             service.google_scopes(),
             "openid email https://www.googleapis.com/auth/spreadsheets"
@@ -3356,6 +3680,12 @@ mod tests {
                 client_secret: "secret".into(),
                 redirect_uri: "http://localhost/google".into(),
             },
+
+            github: OAuthProviderConfig {
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                redirect_uri: "http://localhost/github".into(),
+            },
             microsoft: OAuthProviderConfig {
                 client_id: "client".into(),
                 client_secret: "secret".into(),
@@ -3389,7 +3719,14 @@ mod tests {
             token_encryption_key: vec![0u8; 32],
         };
 
-        let mut service = OAuthAccountService::new(repo, workspace_repo, key, client, &settings);
+        let mut service = OAuthAccountService::new(
+            repo,
+            workspace_repo,
+            key,
+            client,
+            &settings,
+            &crate::config::GitHubAppSettings::default(),
+        );
         service.set_google_endpoint_overrides(
             token_server.url("/token"),
             userinfo_server.url("/v1/userinfo"),
@@ -3441,6 +3778,12 @@ mod tests {
                 client_secret: "secret".into(),
                 redirect_uri: "http://localhost/google".into(),
             },
+
+            github: OAuthProviderConfig {
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                redirect_uri: "http://localhost/github".into(),
+            },
             microsoft: OAuthProviderConfig {
                 client_id: "client".into(),
                 client_secret: "secret".into(),
@@ -3474,7 +3817,14 @@ mod tests {
             token_encryption_key: vec![0u8; 32],
         };
 
-        let mut service = OAuthAccountService::new(repo, workspace_repo, key, client, &settings);
+        let mut service = OAuthAccountService::new(
+            repo,
+            workspace_repo,
+            key,
+            client,
+            &settings,
+            &crate::config::GitHubAppSettings::default(),
+        );
         service.set_google_endpoint_overrides(
             token_server.url("/token"),
             userinfo_server.url("/v1/userinfo"),
@@ -3492,6 +3842,268 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn github_refresh_disabled_returns_not_supported() {
+        let client = Arc::new(Client::new());
+        let repo: Arc<dyn UserOAuthTokenRepository> = Arc::new(InMemoryRepo);
+        let workspace_repo: Arc<dyn WorkspaceConnectionRepository> = Arc::new(NoopWorkspaceRepo);
+        let key = Arc::new(vec![0u8; 32]);
+        let settings = OAuthSettings {
+            google: OAuthProviderConfig {
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                redirect_uri: "http://localhost/google".into(),
+            },
+
+            github: OAuthProviderConfig {
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                redirect_uri: "http://localhost/github".into(),
+            },
+            microsoft: OAuthProviderConfig {
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                redirect_uri: "http://localhost/microsoft".into(),
+            },
+            slack: OAuthProviderConfig {
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                redirect_uri: "http://localhost/slack".into(),
+            },
+            asana: OAuthProviderConfig {
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                redirect_uri: "http://localhost/asana".into(),
+            },
+            notion: OAuthProviderConfig {
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                redirect_uri: "http://localhost/asana".into(),
+            },
+            bitly: OAuthProviderConfig {
+                client_id: "stub".into(),
+                client_secret: "stub".into(),
+                redirect_uri: "http://localhost".into(),
+            },
+            raindrop: OAuthProviderConfig {
+                client_id: "stub".into(),
+                client_secret: "stub".into(),
+                redirect_uri: "http://localhost".into(),
+            },
+            token_encryption_key: vec![0u8; 32],
+        };
+        let github_app = crate::config::GitHubAppSettings {
+            app_id: Some(42),
+            private_key: Some("key".into()),
+            user_oauth_enabled: true,
+            user_token_refresh_enabled: false,
+        };
+
+        let service =
+            OAuthAccountService::new(repo, workspace_repo, key, client, &settings, &github_app);
+
+        let err = service
+            .refresh_access_token(ConnectedOAuthProvider::GitHub, "refresh-token")
+            .await
+            .expect_err("refresh should be disabled");
+
+        assert!(matches!(
+            err,
+            OAuthAccountError::RefreshNotSupported {
+                provider: ConnectedOAuthProvider::GitHub
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn github_refresh_attempts_when_enabled() {
+        let token_server = httpmock::MockServer::start();
+        let token_mock = token_server.mock(|when, then| {
+            when.method(httpmock::Method::POST).path("/token");
+            then.status(200).json_body(serde_json::json!({
+                "access_token": "new-access",
+                "refresh_token": "new-refresh",
+                "expires_in": 3600
+            }));
+        });
+
+        let client = Arc::new(Client::new());
+        let repo: Arc<dyn UserOAuthTokenRepository> = Arc::new(InMemoryRepo);
+        let workspace_repo: Arc<dyn WorkspaceConnectionRepository> = Arc::new(NoopWorkspaceRepo);
+        let key = Arc::new(vec![0u8; 32]);
+        let settings = OAuthSettings {
+            google: OAuthProviderConfig {
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                redirect_uri: "http://localhost/google".into(),
+            },
+
+            github: OAuthProviderConfig {
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                redirect_uri: "http://localhost/github".into(),
+            },
+            microsoft: OAuthProviderConfig {
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                redirect_uri: "http://localhost/microsoft".into(),
+            },
+            slack: OAuthProviderConfig {
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                redirect_uri: "http://localhost/slack".into(),
+            },
+            asana: OAuthProviderConfig {
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                redirect_uri: "http://localhost/asana".into(),
+            },
+            notion: OAuthProviderConfig {
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                redirect_uri: "http://localhost/asana".into(),
+            },
+            bitly: OAuthProviderConfig {
+                client_id: "stub".into(),
+                client_secret: "stub".into(),
+                redirect_uri: "http://localhost".into(),
+            },
+            raindrop: OAuthProviderConfig {
+                client_id: "stub".into(),
+                client_secret: "stub".into(),
+                redirect_uri: "http://localhost".into(),
+            },
+            token_encryption_key: vec![0u8; 32],
+        };
+        let github_app = crate::config::GitHubAppSettings {
+            app_id: Some(42),
+            private_key: Some("key".into()),
+            user_oauth_enabled: true,
+            user_token_refresh_enabled: true,
+        };
+
+        let mut service =
+            OAuthAccountService::new(repo, workspace_repo, key, client, &settings, &github_app);
+        service.set_github_endpoint_overrides(
+            token_server.url("/token"),
+            token_server.url("/user"),
+            token_server.url("/emails"),
+        );
+
+        let refreshed = service
+            .refresh_access_token(ConnectedOAuthProvider::GitHub, "refresh-token")
+            .await
+            .expect("refresh should succeed");
+
+        token_mock.assert();
+        assert_eq!(refreshed.access_token, "new-access");
+        assert_eq!(refreshed.refresh_token, "new-refresh");
+    }
+
+    #[tokio::test]
+    async fn github_exchange_succeeds_without_refresh_token() {
+        let server = httpmock::MockServer::start();
+        let token_mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST).path("/token");
+            then.status(200).json_body(serde_json::json!({
+                "access_token": "access"
+            }));
+        });
+        let user_mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET).path("/user");
+            then.status(200).json_body(serde_json::json!({
+                "login": "octo",
+                "id": 42,
+                "email": "octo@example.com"
+            }));
+        });
+        let email_mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET).path("/emails");
+            then.status(200).json_body(serde_json::json!([
+                {
+                    "email": "primary@example.com",
+                    "primary": true,
+                    "verified": true
+                }
+            ]));
+        });
+
+        let client = Arc::new(Client::new());
+        let repo: Arc<dyn UserOAuthTokenRepository> = Arc::new(InMemoryRepo);
+        let workspace_repo: Arc<dyn WorkspaceConnectionRepository> = Arc::new(NoopWorkspaceRepo);
+        let key = Arc::new(vec![0u8; 32]);
+        let settings = OAuthSettings {
+            google: OAuthProviderConfig {
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                redirect_uri: "http://localhost/google".into(),
+            },
+
+            github: OAuthProviderConfig {
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                redirect_uri: "http://localhost/github".into(),
+            },
+            microsoft: OAuthProviderConfig {
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                redirect_uri: "http://localhost/microsoft".into(),
+            },
+            slack: OAuthProviderConfig {
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                redirect_uri: "http://localhost/slack".into(),
+            },
+            asana: OAuthProviderConfig {
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                redirect_uri: "http://localhost/asana".into(),
+            },
+            notion: OAuthProviderConfig {
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                redirect_uri: "http://localhost/asana".into(),
+            },
+            bitly: OAuthProviderConfig {
+                client_id: "stub".into(),
+                client_secret: "stub".into(),
+                redirect_uri: "http://localhost".into(),
+            },
+            raindrop: OAuthProviderConfig {
+                client_id: "stub".into(),
+                client_secret: "stub".into(),
+                redirect_uri: "http://localhost".into(),
+            },
+            token_encryption_key: vec![0u8; 32],
+        };
+        let github_app = crate::config::GitHubAppSettings {
+            app_id: Some(42),
+            private_key: Some("key".into()),
+            user_oauth_enabled: true,
+            user_token_refresh_enabled: false,
+        };
+
+        let mut service =
+            OAuthAccountService::new(repo, workspace_repo, key, client, &settings, &github_app);
+        service.set_github_endpoint_overrides(
+            server.url("/token"),
+            server.url("/user"),
+            server.url("/emails"),
+        );
+
+        let tokens = service
+            .exchange_authorization_code(ConnectedOAuthProvider::GitHub, "auth-code")
+            .await
+            .expect("github exchange should succeed");
+
+        token_mock.assert();
+        user_mock.assert();
+        email_mock.assert();
+        assert!(tokens.refresh_token.is_empty());
+        assert_eq!(tokens.account_email, "octo");
+        assert!(tokens.expires_at > OffsetDateTime::now_utc() + Duration::days(3650));
     }
 
     #[tokio::test]
@@ -4183,6 +4795,11 @@ mod tests {
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/google".into(),
                 },
+                github: OAuthProviderConfig {
+                    client_id: "client".into(),
+                    client_secret: "secret".into(),
+                    redirect_uri: "http://localhost/github".into(),
+                },
                 microsoft: OAuthProviderConfig {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
@@ -4215,6 +4832,7 @@ mod tests {
                 },
                 token_encryption_key: (*key).clone(),
             },
+            &crate::config::GitHubAppSettings::default(),
         );
 
         let make_writer = BufferingMakeWriter::new();
@@ -4283,6 +4901,11 @@ mod tests {
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/google".into(),
                 },
+                github: OAuthProviderConfig {
+                    client_id: "client".into(),
+                    client_secret: "secret".into(),
+                    redirect_uri: "http://localhost/github".into(),
+                },
                 microsoft: OAuthProviderConfig {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
@@ -4315,6 +4938,7 @@ mod tests {
                 },
                 token_encryption_key: vec![0u8; 32],
             },
+            &crate::config::GitHubAppSettings::default(),
         );
 
         service
@@ -4359,6 +4983,11 @@ mod tests {
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/google".into(),
                 },
+                github: OAuthProviderConfig {
+                    client_id: "client".into(),
+                    client_secret: "secret".into(),
+                    redirect_uri: "http://localhost/github".into(),
+                },
                 microsoft: OAuthProviderConfig {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
@@ -4391,6 +5020,7 @@ mod tests {
                 },
                 token_encryption_key: vec![0u8; 32],
             },
+            &crate::config::GitHubAppSettings::default(),
         );
 
         let err = service
@@ -4448,6 +5078,11 @@ mod tests {
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/google".into(),
                 },
+                github: OAuthProviderConfig {
+                    client_id: "client".into(),
+                    client_secret: "secret".into(),
+                    redirect_uri: "http://localhost/github".into(),
+                },
                 microsoft: OAuthProviderConfig {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
@@ -4480,6 +5115,7 @@ mod tests {
                 },
                 token_encryption_key: (*key).clone(),
             },
+            &crate::config::GitHubAppSettings::default(),
         );
 
         let revocations = Arc::new(Mutex::new(Vec::new()));
@@ -4552,6 +5188,11 @@ mod tests {
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/google".into(),
                 },
+                github: OAuthProviderConfig {
+                    client_id: "client".into(),
+                    client_secret: "secret".into(),
+                    redirect_uri: "http://localhost/github".into(),
+                },
                 microsoft: OAuthProviderConfig {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
@@ -4584,6 +5225,7 @@ mod tests {
                 },
                 token_encryption_key: (*key).clone(),
             },
+            &crate::config::GitHubAppSettings::default(),
         );
 
         let first = service
@@ -4697,6 +5339,11 @@ mod tests {
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/google".into(),
                 },
+                github: OAuthProviderConfig {
+                    client_id: "client".into(),
+                    client_secret: "secret".into(),
+                    redirect_uri: "http://localhost/github".into(),
+                },
                 microsoft: OAuthProviderConfig {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
@@ -4729,6 +5376,7 @@ mod tests {
                 },
                 token_encryption_key: (*key).clone(),
             },
+            &crate::config::GitHubAppSettings::default(),
         );
         fn noop_revocation(
             _provider: ConnectedOAuthProvider,
@@ -4849,6 +5497,11 @@ mod tests {
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/google".into(),
                 },
+                github: OAuthProviderConfig {
+                    client_id: "client".into(),
+                    client_secret: "secret".into(),
+                    redirect_uri: "http://localhost/github".into(),
+                },
                 microsoft: OAuthProviderConfig {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
@@ -4881,6 +5534,7 @@ mod tests {
                 },
                 token_encryption_key: (*key).clone(),
             },
+            &crate::config::GitHubAppSettings::default(),
         )
         .save_authorization_deduped(user_id, ConnectedOAuthProvider::Slack, tokens)
         .await
@@ -4935,6 +5589,11 @@ mod tests {
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/google".into(),
                 },
+                github: OAuthProviderConfig {
+                    client_id: "client".into(),
+                    client_secret: "secret".into(),
+                    redirect_uri: "http://localhost/github".into(),
+                },
                 microsoft: OAuthProviderConfig {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
@@ -4967,6 +5626,7 @@ mod tests {
                 },
                 token_encryption_key: (*key).clone(),
             },
+            &crate::config::GitHubAppSettings::default(),
         );
 
         let tokens = AuthorizationTokens {
@@ -5034,6 +5694,11 @@ mod tests {
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/google".into(),
                 },
+                github: OAuthProviderConfig {
+                    client_id: "client".into(),
+                    client_secret: "secret".into(),
+                    redirect_uri: "http://localhost/github".into(),
+                },
                 microsoft: OAuthProviderConfig {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
@@ -5066,6 +5731,7 @@ mod tests {
                 },
                 token_encryption_key: (*key).clone(),
             },
+            &crate::config::GitHubAppSettings::default(),
         );
 
         let tokens = AuthorizationTokens {
@@ -5145,6 +5811,11 @@ mod tests {
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/google".into(),
                 },
+                github: OAuthProviderConfig {
+                    client_id: "client".into(),
+                    client_secret: "secret".into(),
+                    redirect_uri: "http://localhost/github".into(),
+                },
                 microsoft: OAuthProviderConfig {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
@@ -5177,6 +5848,7 @@ mod tests {
                 },
                 token_encryption_key: (*key).clone(),
             },
+            &crate::config::GitHubAppSettings::default(),
         );
 
         let first = service
@@ -5260,6 +5932,11 @@ mod tests {
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/google".into(),
                 },
+                github: OAuthProviderConfig {
+                    client_id: "client".into(),
+                    client_secret: "secret".into(),
+                    redirect_uri: "http://localhost/github".into(),
+                },
                 microsoft: OAuthProviderConfig {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
@@ -5292,6 +5969,7 @@ mod tests {
                 },
                 token_encryption_key: (*key).clone(),
             },
+            &crate::config::GitHubAppSettings::default(),
         );
 
         let expiring = service
@@ -5435,6 +6113,11 @@ mod tests {
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/google".into(),
                 },
+                github: OAuthProviderConfig {
+                    client_id: "client".into(),
+                    client_secret: "secret".into(),
+                    redirect_uri: "http://localhost/github".into(),
+                },
                 microsoft: OAuthProviderConfig {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
@@ -5467,6 +6150,7 @@ mod tests {
                 },
                 token_encryption_key: (*key).clone(),
             },
+            &crate::config::GitHubAppSettings::default(),
         );
 
         service.set_refresh_override(Some(Arc::new(
@@ -5518,6 +6202,11 @@ mod tests {
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/google".into(),
                 },
+                github: OAuthProviderConfig {
+                    client_id: "client".into(),
+                    client_secret: "secret".into(),
+                    redirect_uri: "http://localhost/github".into(),
+                },
                 microsoft: OAuthProviderConfig {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
@@ -5550,6 +6239,7 @@ mod tests {
                 },
                 token_encryption_key: (*key).clone(),
             },
+            &crate::config::GitHubAppSettings::default(),
         );
 
         let err = service

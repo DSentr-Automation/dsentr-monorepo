@@ -420,10 +420,7 @@ pub(crate) async fn execute_http(
             "DELETE" => client.delete(url_parsed.clone()),
             "HEAD" => client.head(url_parsed.clone()),
             _ => {
-                return Err(format!(
-                    "HTTP method `{}` is not supported",
-                    method
-                ));
+                return Err(format!("HTTP method `{}` is not supported", method));
             }
         }
         .headers(headers.clone());

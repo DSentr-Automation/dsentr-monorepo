@@ -62,3 +62,8 @@
 - Main now validates the OAuth provider mapping against the integration registry at startup to fail fast on missing mappings.
 - Added embedded action manifest loading under `src/action_manifests` so custom action nodes can be registered without per-node Rust code.
 - Initialized a shared action manifest registry at startup and exposed it via AppState helpers for the new catalog route.
+- Config now loads GitHub OAuth settings and the main router mounts GitHub OAuth connect routes for the new integration flow.
+- Config now loads GitHub App settings (ID, private key, refresh toggle), and main asserts required GitHub App config when the GitHub integration declares itself as a GitHub App.
+- Config now tracks whether GitHub App user OAuth is enabled and startup validation fails fast when GitHub App user OAuth is disabled while the GitHub integration is active.
+- Collapsed GitHub HTTP actions into a single operation-based manifest so GitHub issue, pull request, release, label, and workflow dispatch actions share one catalog entry.
+- Main router now mounts GitHub App webhook ingress for `/api/webhooks/github/:subscription_id`, reusing the webhook pipeline after signature validation and header-derived event typing.

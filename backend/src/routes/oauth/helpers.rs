@@ -6,6 +6,9 @@ use crate::integrations::manifest::{
 };
 use crate::integrations::registry::IntegrationRegistry;
 pub(crate) const GOOGLE_AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
+// GitHub App user-to-server OAuth uses the OAuth App authorize endpoint and is valid only when
+// user OAuth is enabled in the GitHub App settings.
+pub(crate) const GITHUB_AUTH_URL: &str = "https://github.com/login/oauth/authorize";
 pub(crate) const MICROSOFT_AUTH_URL: &str =
     "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
 pub(crate) const SLACK_AUTH_URL: &str = "https://slack.com/oauth/v2/authorize";
@@ -14,6 +17,7 @@ pub(crate) const NOTION_AUTH_URL: &str = "https://api.notion.com/v1/oauth/author
 pub(crate) const BITLY_AUTH_URL: &str = "https://bitly.com/oauth/authorize";
 pub(crate) const RAINDROP_AUTH_URL: &str = "https://raindrop.io/oauth/authorize";
 pub(crate) const GOOGLE_STATE_COOKIE: &str = "oauth_google_state";
+pub(crate) const GITHUB_STATE_COOKIE: &str = "oauth_github_state";
 pub(crate) const MICROSOFT_STATE_COOKIE: &str = "oauth_microsoft_state";
 pub(crate) const SLACK_STATE_COOKIE: &str = "oauth_slack_state";
 pub(crate) const ASANA_STATE_COOKIE: &str = "oauth_asana_state";
@@ -364,6 +368,7 @@ pub fn map_oauth_error(err: OAuthAccountError) -> Response {
         OAuthAccountError::EmailNotVerified { provider } => {
             let provider_name = match provider {
                 ConnectedOAuthProvider::Google => "Google",
+                ConnectedOAuthProvider::GitHub => "GitHub",
                 ConnectedOAuthProvider::Microsoft => "Microsoft",
                 ConnectedOAuthProvider::Slack => "Slack",
                 ConnectedOAuthProvider::Asana => "Asana",
@@ -504,6 +509,7 @@ pub(crate) fn resolve_oauth_integration<'a>(
 // stay integration_id-driven. This mapping is intentionally isolated to OAuth routes, and
 // manifests must not depend on provider enums going forward.
 pub(crate) const GOOGLE_INTEGRATION_ID: &str = "google";
+pub(crate) const GITHUB_INTEGRATION_ID: &str = "github";
 pub(crate) const MICROSOFT_INTEGRATION_ID: &str = "microsoft";
 pub(crate) const SLACK_INTEGRATION_ID: &str = "slack";
 pub(crate) const ASANA_INTEGRATION_ID: &str = "asana";
@@ -512,6 +518,7 @@ pub(crate) const BITLY_INTEGRATION_ID: &str = "bitly";
 pub(crate) const RAINDROP_INTEGRATION_ID: &str = "raindrop";
 const OAUTH_PROVIDER_MAP: &[(&str, ConnectedOAuthProvider)] = &[
     (GOOGLE_INTEGRATION_ID, ConnectedOAuthProvider::Google),
+    (GITHUB_INTEGRATION_ID, ConnectedOAuthProvider::GitHub),
     (MICROSOFT_INTEGRATION_ID, ConnectedOAuthProvider::Microsoft),
     (SLACK_INTEGRATION_ID, ConnectedOAuthProvider::Slack),
     (ASANA_INTEGRATION_ID, ConnectedOAuthProvider::Asana),

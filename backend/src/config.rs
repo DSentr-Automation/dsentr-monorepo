@@ -28,6 +28,25 @@ pub struct OAuthProviderConfig {
     pub redirect_uri: String,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct GitHubAppSettings {
+    pub app_id: Option<i64>,
+    pub private_key: Option<String>,
+    pub user_oauth_enabled: bool,
+    pub user_token_refresh_enabled: bool,
+}
+
+impl GitHubAppSettings {
+    pub fn is_configured(&self) -> bool {
+        self.app_id.is_some()
+            && self
+                .private_key
+                .as_deref()
+                .map(|key| !key.trim().is_empty())
+                .unwrap_or(false)
+    }
+}
+
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct StripeSettings {
@@ -39,6 +58,7 @@ pub struct StripeSettings {
 #[derive(Clone, Debug)]
 pub struct OAuthSettings {
     pub google: OAuthProviderConfig,
+    pub github: OAuthProviderConfig,
     pub microsoft: OAuthProviderConfig,
     pub slack: OAuthProviderConfig,
     pub asana: OAuthProviderConfig,
@@ -61,6 +81,7 @@ pub struct Config {
     pub frontend_origin: String,
     pub admin_origin: String,
     pub oauth: OAuthSettings,
+    pub github_app: GitHubAppSettings,
     pub api_secrets_encryption_key: Vec<u8>,
     #[allow(dead_code)]
     pub stripe: StripeSettings,
@@ -135,6 +156,12 @@ impl Config {
             redirect_uri: require_env("GOOGLE_INTEGRATIONS_REDIRECT_URI")?,
         };
 
+        let github = OAuthProviderConfig {
+            client_id: require_env("GITHUB_INTEGRATIONS_CLIENT_ID")?,
+            client_secret: require_env("GITHUB_INTEGRATIONS_CLIENT_SECRET")?,
+            redirect_uri: require_env("GITHUB_INTEGRATIONS_REDIRECT_URI")?,
+        };
+
         let microsoft = OAuthProviderConfig {
             client_id: require_env("MICROSOFT_INTEGRATIONS_CLIENT_ID")?,
             client_secret: require_env("MICROSOFT_INTEGRATIONS_CLIENT_SECRET")?,
@@ -174,6 +201,16 @@ impl Config {
                 name: "OAUTH_TOKEN_ENCRYPTION_KEY",
                 source,
             })?;
+
+        let github_app_id = parse_optional_env_i64("GITHUB_APP_ID")?;
+        let github_app_private_key = env::var("GITHUB_APP_PRIVATE_KEY")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .map(|value| normalize_multiline_pem(&value));
+        let github_app_user_token_refresh_enabled =
+            parse_env_bool("GITHUB_APP_USER_TOKEN_REFRESH_ENABLED", false)?;
+        let github_app_user_oauth_enabled = parse_env_bool("GITHUB_APP_USER_OAUTH_ENABLED", false)?;
 
         let api_secrets_key_b64 = require_env("API_SECRETS_ENCRYPTION_KEY")?;
         let api_secrets_encryption_key =
@@ -221,6 +258,7 @@ impl Config {
             admin_origin,
             oauth: OAuthSettings {
                 google,
+                github,
                 microsoft,
                 slack,
                 asana,
@@ -228,6 +266,12 @@ impl Config {
                 bitly,
                 raindrop,
                 token_encryption_key,
+            },
+            github_app: GitHubAppSettings {
+                app_id: github_app_id,
+                private_key: github_app_private_key,
+                user_oauth_enabled: github_app_user_oauth_enabled,
+                user_token_refresh_enabled: github_app_user_token_refresh_enabled,
             },
             api_secrets_encryption_key,
             stripe,
@@ -268,6 +312,49 @@ fn parse_positive_env_i64(name: &'static str, default: i64) -> Result<i64, Confi
         }
         Err(_) => Ok(default),
     }
+}
+
+fn parse_optional_env_i64(name: &'static str) -> Result<Option<i64>, ConfigError> {
+    match env::var(name) {
+        Ok(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Ok(None);
+            }
+            let value = trimmed
+                .parse::<i64>()
+                .map_err(|err| ConfigError::InvalidEnvVar {
+                    name,
+                    reason: err.to_string(),
+                })?;
+            Ok(Some(value))
+        }
+        Err(_) => Ok(None),
+    }
+}
+
+fn parse_env_bool(name: &'static str, default: bool) -> Result<bool, ConfigError> {
+    match env::var(name) {
+        Ok(raw) => {
+            let normalized = raw.trim().to_ascii_lowercase();
+            if normalized.is_empty() {
+                return Ok(default);
+            }
+            match normalized.as_str() {
+                "1" | "true" | "yes" | "on" => Ok(true),
+                "0" | "false" | "no" | "off" => Ok(false),
+                _ => Err(ConfigError::InvalidEnvVar {
+                    name,
+                    reason: "must be true or false".to_string(),
+                }),
+            }
+        }
+        Err(_) => Ok(default),
+    }
+}
+
+fn normalize_multiline_pem(value: &str) -> String {
+    value.replace("\\n", "\n").replace("\r\n", "\n")
 }
 
 fn parse_webhook_ingress_dedupe_mode(
@@ -367,12 +454,15 @@ mod tests {
     use std::sync::Mutex;
     use std::{panic, panic::UnwindSafe};
 
-    const REQUIRED_VARS: [&str; 30] = [
+    const REQUIRED_VARS: [&str; 33] = [
         "DATABASE_URL",
         "FRONTEND_ORIGIN",
         "GOOGLE_INTEGRATIONS_CLIENT_ID",
         "GOOGLE_INTEGRATIONS_CLIENT_SECRET",
         "GOOGLE_INTEGRATIONS_REDIRECT_URI",
+        "GITHUB_INTEGRATIONS_CLIENT_ID",
+        "GITHUB_INTEGRATIONS_CLIENT_SECRET",
+        "GITHUB_INTEGRATIONS_REDIRECT_URI",
         "MICROSOFT_INTEGRATIONS_CLIENT_ID",
         "MICROSOFT_INTEGRATIONS_CLIENT_SECRET",
         "MICROSOFT_INTEGRATIONS_REDIRECT_URI",
@@ -400,13 +490,17 @@ mod tests {
         "RAINDROP_INTEGRATIONS_REDIRECT_URI",
     ];
 
-    const OPTIONAL_VARS: [&str; 6] = [
+    const OPTIONAL_VARS: [&str; 10] = [
         "AUTH_COOKIE_SECURE",
         "WORKSPACE_MEMBER_LIMIT",
         "WORKSPACE_MONTHLY_RUN_LIMIT",
         "RUNAWAY_LIMIT_5MIN",
         "ADMIN_ORIGIN",
         "WEBHOOK_INGRESS_DEDUPE_MODE",
+        "GITHUB_APP_ID",
+        "GITHUB_APP_PRIVATE_KEY",
+        "GITHUB_APP_USER_OAUTH_ENABLED",
+        "GITHUB_APP_USER_TOKEN_REFRESH_ENABLED",
     ]; // allow tests to run without ambient overrides
 
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
@@ -479,6 +573,12 @@ mod tests {
             "GOOGLE_INTEGRATIONS_REDIRECT_URI",
             "http://localhost/google",
         );
+        env::set_var("GITHUB_INTEGRATIONS_CLIENT_ID", "github-client-id");
+        env::set_var("GITHUB_INTEGRATIONS_CLIENT_SECRET", "github-client-secret");
+        env::set_var(
+            "GITHUB_INTEGRATIONS_REDIRECT_URI",
+            "http://localhost/github",
+        );
         env::set_var("MICROSOFT_INTEGRATIONS_CLIENT_ID", "microsoft-client-id");
         env::set_var(
             "MICROSOFT_INTEGRATIONS_CLIENT_SECRET",
@@ -514,6 +614,13 @@ mod tests {
         );
         let key = base64::engine::general_purpose::STANDARD.encode([0u8; 32]);
         env::set_var("OAUTH_TOKEN_ENCRYPTION_KEY", key);
+        env::set_var("GITHUB_APP_ID", "4242");
+        env::set_var(
+            "GITHUB_APP_PRIVATE_KEY",
+            "-----BEGIN PRIVATE KEY-----\\nline\\n-----END PRIVATE KEY-----",
+        );
+        env::set_var("GITHUB_APP_USER_TOKEN_REFRESH_ENABLED", "true");
+        env::set_var("GITHUB_APP_USER_OAUTH_ENABLED", "true");
         env::set_var(
             "API_SECRETS_ENCRYPTION_KEY",
             base64::engine::general_purpose::STANDARD.encode([1u8; 32]),
@@ -555,6 +662,15 @@ mod tests {
             assert_eq!(config.admin_origin, "http://localhost:3000");
             assert_eq!(config.oauth.google.client_id, "google-client-id");
             assert_eq!(config.oauth.token_encryption_key.len(), 32);
+            assert_eq!(config.github_app.app_id, Some(4242));
+            assert!(config
+                .github_app
+                .private_key
+                .as_deref()
+                .unwrap_or("")
+                .contains("BEGIN PRIVATE KEY"));
+            assert!(config.github_app.user_token_refresh_enabled);
+            assert!(config.github_app.user_oauth_enabled);
             assert!(config.auth_cookie_secure);
             assert_eq!(config.jwt_issuer, "dsentr.test");
             assert_eq!(config.jwt_audience, "dsentr.api");

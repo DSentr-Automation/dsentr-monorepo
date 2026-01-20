@@ -860,12 +860,13 @@ impl WorkspaceOAuthService {
     fn provider_sort_key(provider: ConnectedOAuthProvider) -> u8 {
         match provider {
             ConnectedOAuthProvider::Google => 0,
-            ConnectedOAuthProvider::Microsoft => 1,
-            ConnectedOAuthProvider::Slack => 2,
-            ConnectedOAuthProvider::Asana => 3,
-            ConnectedOAuthProvider::Notion => 4,
-            ConnectedOAuthProvider::Bitly => 5,
-            ConnectedOAuthProvider::Raindrop => 6,
+            ConnectedOAuthProvider::GitHub => 1,
+            ConnectedOAuthProvider::Microsoft => 2,
+            ConnectedOAuthProvider::Slack => 3,
+            ConnectedOAuthProvider::Asana => 4,
+            ConnectedOAuthProvider::Notion => 5,
+            ConnectedOAuthProvider::Bitly => 6,
+            ConnectedOAuthProvider::Raindrop => 7,
         }
     }
 

@@ -1,6 +1,4 @@
-pub(crate) fn normalize_egress_allowlist(
-    entries: Vec<String>,
-) -> (Vec<String>, Vec<String>) {
+pub(crate) fn normalize_egress_allowlist(entries: Vec<String>) -> (Vec<String>, Vec<String>) {
     let mut allowed = Vec::new();
     let mut rejected = Vec::new();
 

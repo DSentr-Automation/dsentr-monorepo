@@ -55,3 +55,7 @@
 - OAuth routes now share a single integration-resolution helper, use integration-id constants in connect handlers, and align path errors on "integration" terminology.
 - OAuth connections listing no longer 409s when workspace-first personal auth exists without a workspace connection; it now returns success and preserves derived personal auth state.
 - Added list-connections regression tests to assert workspace-first personal auth returns 200 without workspace connections and uses token updated_at for personal_auth_connected_at.
+- Added GitHub OAuth constants, provider mapping, and connect start/callback handlers so GitHub integrations can be authorized like existing providers.
+- OAuth route test configs now include GitHub App settings to satisfy updated Config and OAuthAccountService wiring.
+- GitHub OAuth connect flow now documents that the authorize URL requires a GitHub App with user OAuth enabled.
+- Added GitHub OAuth connect start/callback tests with stubbed token exchange and personal-token assertions so GitHub routing stays aligned with other providers.

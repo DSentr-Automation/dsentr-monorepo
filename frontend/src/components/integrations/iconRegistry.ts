@@ -4,6 +4,7 @@ import type { ComponentType, SVGProps } from 'react'
 import AsanaIcon from '@/assets/svg-components/third-party/AsanaIcon'
 import BitlyIcon from '@/assets/svg-components/third-party/BitlyIcon'
 import GoogleIcon from '@/assets/svg-components/third-party/GoogleIcon'
+import GitHubIcon from '@/assets/svg-components/third-party/GitHubIcon'
 import MicrosoftIcon from '@/assets/svg-components/third-party/MicrosoftIcon'
 import NotionIcon from '@/assets/svg-components/third-party/NotionIcon'
 import SlackIcon from '@/assets/svg-components/third-party/SlackIcon'
@@ -21,6 +22,7 @@ export const INTEGRATION_ICONS: Record<
   bitly: BitlyIcon,
   slack: SlackIcon,
   google: GoogleIcon,
+  github: GitHubIcon,
   microsoft: MicrosoftIcon,
   asana: AsanaIcon,
   notion: NotionIcon,

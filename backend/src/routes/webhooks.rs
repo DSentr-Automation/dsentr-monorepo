@@ -5,11 +5,13 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use hmac::{Hmac, Mac};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::future::Future;
+use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
 use tracing::{error, info, warn, Span};
 use uuid::Uuid;
@@ -36,10 +38,14 @@ use crate::routes::webhook_ingress_validation::{
 };
 use crate::state::AppState;
 use crate::utils::egress_allowlist::normalize_egress_allowlist;
+use crate::utils::encryption::decrypt_secret;
 
 // Payload field used to match webhook subscriptions.
 const EVENT_TYPE_FIELD: &str = "event_type";
 const SIGNATURE_PREFIX: &str = "v1=";
+const GITHUB_EVENT_HEADER: &str = "X-GitHub-Event";
+const GITHUB_SIGNATURE_HEADER: &str = "X-Hub-Signature-256";
+const GITHUB_SIGNATURE_PREFIX: &str = "sha256=";
 const HASH_PREFIX_LEN: usize = 12;
 const METRIC_INGRESS_DEDUPE_HIT: &str = "ingress_dedupe_hit";
 const METRIC_INGRESS_DEDUPE_MISS: &str = "ingress_dedupe_miss";
@@ -62,6 +68,8 @@ const DELIVERY_ERROR_WORKFLOW_NOT_FOUND: &str = "workflow_not_found";
 const DELIVERY_ERROR_WORKFLOW_LOOKUP_FAILED: &str = "workflow_lookup_failed";
 const DELIVERY_ERROR_WORKSPACE_MISMATCH: &str = "workflow_workspace_mismatch";
 const DELIVERY_ERROR_RUN_ENQUEUE_FAILED: &str = "run_enqueue_failed";
+
+type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum DedupeOutcome {
@@ -331,6 +339,39 @@ async fn update_delivery_status_safe(
 
 fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name).and_then(|value| value.to_str().ok())
+}
+
+fn compute_github_signature(secret: &str, body: &[u8]) -> Result<String, &'static str> {
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).map_err(|_| "Invalid signature key")?;
+    mac.update(body);
+    Ok(hex::encode(mac.finalize().into_bytes()))
+}
+
+fn validate_github_signature(
+    encryption_key: &[u8],
+    source: &WebhookSource,
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<(), WebhookSignatureError> {
+    let secret = decrypt_secret(encryption_key, &source.secret)
+        .map_err(WebhookSignatureError::DecryptFailed)?;
+    let signature = header_value(headers, GITHUB_SIGNATURE_HEADER).ok_or(
+        WebhookSignatureError::ValidationFailed("Missing X-Hub-Signature-256 header"),
+    )?;
+    let signature = signature.trim();
+    let signature = signature.strip_prefix(GITHUB_SIGNATURE_PREFIX).ok_or(
+        WebhookSignatureError::ValidationFailed("Invalid X-Hub-Signature-256 header"),
+    )?;
+    if signature.is_empty() {
+        return Err(WebhookSignatureError::ValidationFailed("Missing signature"));
+    }
+    let expected =
+        compute_github_signature(&secret, body).map_err(WebhookSignatureError::ValidationFailed)?;
+    if expected.as_bytes().ct_eq(signature.as_bytes()).unwrap_u8() == 0u8 {
+        return Err(WebhookSignatureError::ValidationFailed("Invalid signature"));
+    }
+    Ok(())
 }
 
 fn build_dedupe_key_context(
@@ -1389,6 +1430,59 @@ pub async fn webhook_ingress(
     .await
 }
 
+pub async fn github_webhook_ingress(
+    State(app_state): State<AppState>,
+    Path(subscription_id): Path<Uuid>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let dedupe_repo = PostgresWebhookIngressDedupeRepository {
+        pool: (*app_state.db_pool).clone(),
+    };
+    let delivery_repo = PostgresWebhookDeliveryRepository {
+        pool: (*app_state.db_pool).clone(),
+    };
+    let source_repo = PostgresWebhookSourceRepository {
+        pool: (*app_state.db_pool).clone(),
+        encryption_key: app_state.config.api_secrets_encryption_key.clone(),
+    };
+    let subscription_repo = PostgresWebhookSubscriptionRepository {
+        pool: (*app_state.db_pool).clone(),
+    };
+
+    let subscription_context =
+        match fetch_subscription_context(app_state.db_pool.as_ref(), subscription_id).await {
+            Ok(Some(context)) => context,
+            Ok(None) => {
+                info!(%subscription_id, "webhook subscription not found");
+                return JsonResponse::not_found("Webhook subscription not found").into_response();
+            }
+            Err(err) => {
+                error!(?err, %subscription_id, "failed to resolve webhook subscription");
+                return JsonResponse::server_error("Failed to resolve webhook subscription")
+                    .into_response();
+            }
+        };
+
+    handle_github_webhook_ingress(
+        &app_state,
+        &dedupe_repo,
+        &delivery_repo,
+        &source_repo,
+        &subscription_repo,
+        app_state.workflow_repo.as_ref(),
+        app_state.config.webhook_ingress_dedupe_mode,
+        &app_state.config.api_secrets_encryption_key,
+        &subscription_context,
+        &headers,
+        body.as_ref(),
+        &app_state.config.webhook_verification_body_fields,
+        &app_state.config.webhook_verification_header_fields,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn handle_webhook_ingress(
     app_state: &AppState,
@@ -1557,6 +1651,221 @@ async fn handle_webhook_ingress(
         }
     }
 
+    dispatch_webhook_event(
+        app_state,
+        dedupe_repo,
+        delivery_repo,
+        source_repo,
+        subscription_repo,
+        workflow_repo,
+        dedupe_mode,
+        &source,
+        headers,
+        payload,
+        raw_body,
+        event_type,
+        now,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_github_webhook_ingress(
+    app_state: &AppState,
+    dedupe_repo: &dyn WebhookIngressDedupeRepository,
+    delivery_repo: &dyn WebhookDeliveryRepository,
+    source_repo: &dyn WebhookSourceRepository,
+    subscription_repo: &dyn WebhookSubscriptionRepository,
+    workflow_repo: &dyn WorkflowRepository,
+    dedupe_mode: WebhookIngressDedupeMode,
+    encryption_key: &[u8],
+    subscription_context: &SubscriptionContext,
+    headers: &HeaderMap,
+    body: &[u8],
+    verification_body_fields: &[String],
+    verification_header_fields: &[(String, Option<String>)],
+    now: OffsetDateTime,
+) -> Response {
+    let span = tracing::info_span!(
+        "webhook_ingress",
+        source_id = %subscription_context.webhook_source_id,
+        event_type = tracing::field::Empty,
+        payload_hash_prefix = tracing::field::Empty,
+        signature_prefix = tracing::field::Empty,
+        timestamp_floor = tracing::field::Empty,
+        dedupe_outcome = tracing::field::Empty,
+    );
+    let _guard = span.enter();
+
+    let github_event = match header_value(headers, GITHUB_EVENT_HEADER)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => value,
+        None => {
+            return JsonResponse::bad_request("Missing X-GitHub-Event header").into_response();
+        }
+    };
+
+    let source = match source_repo
+        .find_webhook_source_by_id(subscription_context.webhook_source_id)
+        .await
+    {
+        Ok(Some(source)) if source.enabled => source,
+        Ok(Some(_)) => {
+            info!(
+                source_id = %subscription_context.webhook_source_id,
+                "webhook source disabled"
+            );
+            return JsonResponse::not_found("Webhook source not found").into_response();
+        }
+        Ok(None) => {
+            info!(
+                source_id = %subscription_context.webhook_source_id,
+                "webhook source not found"
+            );
+            return JsonResponse::not_found("Webhook source not found").into_response();
+        }
+        Err(err) => {
+            error!(
+                ?err,
+                source_id = %subscription_context.webhook_source_id,
+                "failed to resolve webhook source"
+            );
+            return JsonResponse::server_error("Failed to resolve webhook source").into_response();
+        }
+    };
+
+    info!(
+        source_id = %source.id,
+        workspace_id = %source.workspace_id,
+        require_hmac = source.require_hmac,
+        "webhook source resolved"
+    );
+
+    match validate_github_signature(encryption_key, &source, headers, body) {
+        Ok(()) => {}
+        Err(WebhookSignatureError::DecryptFailed(err)) => {
+            error!(?err, source_id = %source.id, "failed to decrypt webhook secret");
+            return JsonResponse::server_error("Failed to validate signature").into_response();
+        }
+        Err(WebhookSignatureError::ValidationFailed(reason)) => {
+            warn!(
+                source_id = %source.id,
+                reason,
+                "github webhook signature validation failed"
+            );
+            return JsonResponse::unauthorized(reason).into_response();
+        }
+    }
+
+    if github_event == "ping" {
+        // GitHub ping events are verification-only; skip JSON parsing and state changes.
+        return (StatusCode::OK, Json(json!({}))).into_response();
+    }
+
+    let payload: Value = match serde_json::from_slice(body) {
+        Ok(value) => value,
+        Err(err) => {
+            warn!(?err, "invalid webhook payload JSON");
+            return JsonResponse::bad_request("Invalid JSON payload").into_response();
+        }
+    };
+
+    let verification_outcome = crate::routes::webhook_verification::is_webhook_verification_request(
+        verification_body_fields,
+        verification_header_fields,
+        headers,
+        &payload,
+    );
+
+    match verification_outcome {
+        crate::routes::webhook_verification::VerificationOutcome::Single(match_detail) => {
+            if payload.get(EVENT_TYPE_FIELD).is_some() {
+                return JsonResponse::bad_request("malformed webhook verification payload")
+                    .into_response();
+            }
+
+            info!(
+                match_type = crate::routes::webhook_verification::match_type_string(&match_detail),
+                indicator_source =
+                    crate::routes::webhook_verification::indicator_source(&match_detail),
+                indicator_key = crate::routes::webhook_verification::indicator_key(&match_detail),
+                indicator_value = crate::routes::webhook_verification::indicator_value(
+                    &match_detail,
+                    &payload,
+                    headers
+                ),
+                "webhook verification request detected"
+            );
+
+            return (StatusCode::OK, Json(json!({}))).into_response();
+        }
+        crate::routes::webhook_verification::VerificationOutcome::Ambiguous(_matches) => {
+            return JsonResponse::bad_request("ambiguous webhook verification payload")
+                .into_response();
+        }
+        crate::routes::webhook_verification::VerificationOutcome::None => {}
+    }
+
+    // GitHub event types are derived from X-GitHub-Event; action only extends the suffix.
+    let action = payload
+        .get("action")
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty());
+    let event_type = match action {
+        Some(action) => format!("github.{}.{}", github_event, action),
+        None => format!("github.{}", github_event),
+    };
+
+    info!(
+        source_id = %source.id,
+        %event_type,
+        "webhook event resolved"
+    );
+
+    Span::current().record("event_type", tracing::field::display(&event_type));
+    info!(
+        source_id = %source.id,
+        event_type = event_type.as_str(),
+        "webhook event accepted"
+    );
+
+    dispatch_webhook_event(
+        app_state,
+        dedupe_repo,
+        delivery_repo,
+        source_repo,
+        subscription_repo,
+        workflow_repo,
+        dedupe_mode,
+        &source,
+        headers,
+        &payload,
+        body,
+        event_type.as_str(),
+        now,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_webhook_event(
+    app_state: &AppState,
+    dedupe_repo: &dyn WebhookIngressDedupeRepository,
+    delivery_repo: &dyn WebhookDeliveryRepository,
+    source_repo: &dyn WebhookSourceRepository,
+    subscription_repo: &dyn WebhookSubscriptionRepository,
+    workflow_repo: &dyn WorkflowRepository,
+    dedupe_mode: WebhookIngressDedupeMode,
+    source: &WebhookSource,
+    headers: &HeaderMap,
+    payload: &Value,
+    raw_body: &[u8],
+    event_type: &str,
+    now: OffsetDateTime,
+) -> Response {
     let accepted_response =
         || (StatusCode::ACCEPTED, Json(json!({ "success": true }))).into_response();
 
@@ -1584,7 +1893,7 @@ async fn handle_webhook_ingress(
     let mut dedupe_context: Option<DedupeKeyContext> = None;
 
     if !matches!(dedupe_mode, WebhookIngressDedupeMode::Off) {
-        match build_dedupe_key_context(&source, event_type, headers, raw_body) {
+        match build_dedupe_key_context(source, event_type, headers, raw_body) {
             Ok(context) => {
                 Span::current().record(
                     "payload_hash_prefix",
@@ -1855,12 +2164,8 @@ async fn handle_webhook_ingress(
                 "Rejected invalid workflow egress allowlist entries"
             );
         }
-        snapshot["_egress_allowlist"] = Value::Array(
-            egress_allowlist
-                .into_iter()
-                .map(Value::String)
-                .collect(),
-        );
+        snapshot["_egress_allowlist"] =
+            Value::Array(egress_allowlist.into_iter().map(Value::String).collect());
 
         let mut workspace_quota = None;
         match app_state
@@ -2042,6 +2347,42 @@ mod tests {
             &[], // verification_body_fields
             &[], // verification_header_fields
             &[], // webhook_event_type_fields
+            now,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn invoke_handle_github_webhook_ingress_with_payload(
+        app_state: &AppState,
+        dedupe_repo: &dyn WebhookIngressDedupeRepository,
+        delivery_repo: &dyn WebhookDeliveryRepository,
+        source_repo: &dyn WebhookSourceRepository,
+        subscription_repo: &dyn WebhookSubscriptionRepository,
+        workflow_repo: &dyn WorkflowRepository,
+        dedupe_mode: WebhookIngressDedupeMode,
+        encryption_key: &[u8],
+        subscription_context: &SubscriptionContext,
+        headers: &HeaderMap,
+        body: &[u8],
+        verification_body_fields: &[String],
+        verification_header_fields: &[(String, Option<String>)],
+        now: OffsetDateTime,
+    ) -> Response {
+        handle_github_webhook_ingress(
+            app_state,
+            dedupe_repo,
+            delivery_repo,
+            source_repo,
+            subscription_repo,
+            workflow_repo,
+            dedupe_mode,
+            encryption_key,
+            subscription_context,
+            headers,
+            body,
+            verification_body_fields,
+            verification_header_fields,
             now,
         )
         .await
@@ -2257,6 +2598,60 @@ mod tests {
                 .filter(|sub| sub.enabled && sub.event_type == event_type)
                 .cloned()
                 .collect())
+        }
+
+        async fn update_subscription_enabled(
+            &self,
+            _webhook_source_id: Uuid,
+            _subscription_id: Uuid,
+            _enabled: bool,
+        ) -> Result<WebhookSubscription, sqlx::Error> {
+            Err(sqlx::Error::RowNotFound)
+        }
+
+        async fn delete_subscription(
+            &self,
+            _webhook_source_id: Uuid,
+            _subscription_id: Uuid,
+        ) -> Result<(), sqlx::Error> {
+            Err(sqlx::Error::RowNotFound)
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingWebhookSubscriptionRepo {
+        requested_event_types: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl WebhookSubscriptionRepository for RecordingWebhookSubscriptionRepo {
+        async fn create_subscription(
+            &self,
+            _webhook_source_id: Uuid,
+            _workflow_id: Uuid,
+            _trigger_node_id: Uuid,
+            _event_type: &str,
+        ) -> Result<WebhookSubscription, sqlx::Error> {
+            Err(sqlx::Error::RowNotFound)
+        }
+
+        async fn list_subscriptions_by_source(
+            &self,
+            _webhook_source_id: Uuid,
+        ) -> Result<Vec<WebhookSubscription>, sqlx::Error> {
+            Ok(vec![])
+        }
+
+        async fn list_subscriptions_by_source_event(
+            &self,
+            _webhook_source_id: Uuid,
+            event_type: &str,
+        ) -> Result<Vec<WebhookSubscription>, sqlx::Error> {
+            self.requested_event_types
+                .lock()
+                .unwrap()
+                .push(event_type.to_string());
+            Ok(vec![])
         }
 
         async fn update_subscription_enabled(
@@ -2635,6 +3030,11 @@ mod tests {
                     client_secret: "secret".into(),
                     redirect_uri: "https://app.example.com/oauth/google".into(),
                 },
+                github: OAuthProviderConfig {
+                    client_id: "client".into(),
+                    client_secret: "secret".into(),
+                    redirect_uri: "https://app.example.com/oauth/github".into(),
+                },
                 microsoft: OAuthProviderConfig {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
@@ -2667,6 +3067,7 @@ mod tests {
                 },
                 token_encryption_key: vec![0; 32],
             },
+            github_app: crate::config::GitHubAppSettings::default(),
             api_secrets_encryption_key: vec![1; 32],
             stripe: StripeSettings {
                 client_id: "stub".into(),
@@ -2722,6 +3123,10 @@ mod tests {
 
     fn sign_payload(secret: &str, timestamp: &str, body: &[u8]) -> String {
         compute_signature(secret, timestamp, body).expect("signature")
+    }
+
+    fn sign_github_payload(secret: &str, body: &[u8]) -> String {
+        compute_github_signature(secret, body).expect("signature")
     }
 
     #[tokio::test]
@@ -3324,6 +3729,270 @@ mod tests {
         .await;
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn github_webhook_valid_signature_accepts() {
+        let key = vec![9u8; 32];
+        let source_id = Uuid::new_v4();
+        let workspace_id = Uuid::new_v4();
+        let secret = encrypt_secret(&key, "secret").expect("encrypt");
+        let source = webhook_source_fixture(source_id, workspace_id, secret);
+        let repo = StubWebhookSourceRepo {
+            source: Some(source),
+            ..Default::default()
+        };
+        let subscription_repo = StubWebhookSubscriptionRepo::default();
+        let workflow_repo = MockWorkflowRepository::new();
+        let dedupe_repo = StubWebhookIngressDedupeRepo::default();
+        let delivery_repo = StubWebhookDeliveryRepo::default();
+        let app_state = default_app_state();
+
+        let subscription_context = SubscriptionContext {
+            _subscription_id: Uuid::new_v4(),
+            webhook_source_id: source_id,
+            workspace_id,
+        };
+
+        let body = br#"{"action":"opened"}"#;
+        let signature = sign_github_payload("secret", body);
+        let mut headers = HeaderMap::new();
+        headers.insert(GITHUB_EVENT_HEADER, "issues".parse().unwrap());
+        headers.insert(
+            GITHUB_SIGNATURE_HEADER,
+            format!("sha256={}", signature).parse().unwrap(),
+        );
+
+        let response = invoke_handle_github_webhook_ingress_with_payload(
+            &app_state,
+            &dedupe_repo,
+            &delivery_repo,
+            &repo,
+            &subscription_repo,
+            &workflow_repo,
+            WebhookIngressDedupeMode::Off,
+            &key,
+            &subscription_context,
+            &headers,
+            body,
+            &[],
+            &[],
+            OffsetDateTime::now_utc(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert!(repo.last_seen.lock().unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn github_webhook_missing_signature_returns_unauthorized() {
+        let key = vec![9u8; 32];
+        let source_id = Uuid::new_v4();
+        let workspace_id = Uuid::new_v4();
+        let secret = encrypt_secret(&key, "secret").expect("encrypt");
+        let source = webhook_source_fixture(source_id, workspace_id, secret);
+        let repo = StubWebhookSourceRepo {
+            source: Some(source),
+            ..Default::default()
+        };
+        let subscription_repo = StubWebhookSubscriptionRepo::default();
+        let workflow_repo = MockWorkflowRepository::new();
+        let dedupe_repo = StubWebhookIngressDedupeRepo::default();
+        let delivery_repo = StubWebhookDeliveryRepo::default();
+        let app_state = default_app_state();
+
+        let subscription_context = SubscriptionContext {
+            _subscription_id: Uuid::new_v4(),
+            webhook_source_id: source_id,
+            workspace_id,
+        };
+
+        let mut headers = HeaderMap::new();
+        headers.insert(GITHUB_EVENT_HEADER, "push".parse().unwrap());
+
+        let response = invoke_handle_github_webhook_ingress_with_payload(
+            &app_state,
+            &dedupe_repo,
+            &delivery_repo,
+            &repo,
+            &subscription_repo,
+            &workflow_repo,
+            WebhookIngressDedupeMode::Off,
+            &key,
+            &subscription_context,
+            &headers,
+            b"not-json",
+            &[],
+            &[],
+            OffsetDateTime::now_utc(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(repo.last_seen.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn github_webhook_invalid_signature_returns_unauthorized() {
+        let key = vec![9u8; 32];
+        let source_id = Uuid::new_v4();
+        let workspace_id = Uuid::new_v4();
+        let secret = encrypt_secret(&key, "secret").expect("encrypt");
+        let source = webhook_source_fixture(source_id, workspace_id, secret);
+        let repo = StubWebhookSourceRepo {
+            source: Some(source),
+            ..Default::default()
+        };
+        let subscription_repo = StubWebhookSubscriptionRepo::default();
+        let workflow_repo = MockWorkflowRepository::new();
+        let dedupe_repo = StubWebhookIngressDedupeRepo::default();
+        let delivery_repo = StubWebhookDeliveryRepo::default();
+        let app_state = default_app_state();
+
+        let subscription_context = SubscriptionContext {
+            _subscription_id: Uuid::new_v4(),
+            webhook_source_id: source_id,
+            workspace_id,
+        };
+
+        let mut headers = HeaderMap::new();
+        headers.insert(GITHUB_EVENT_HEADER, "push".parse().unwrap());
+        headers.insert(GITHUB_SIGNATURE_HEADER, "sha256=deadbeef".parse().unwrap());
+
+        let response = invoke_handle_github_webhook_ingress_with_payload(
+            &app_state,
+            &dedupe_repo,
+            &delivery_repo,
+            &repo,
+            &subscription_repo,
+            &workflow_repo,
+            WebhookIngressDedupeMode::Off,
+            &key,
+            &subscription_context,
+            &headers,
+            br#"{}"#,
+            &[],
+            &[],
+            OffsetDateTime::now_utc(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(repo.last_seen.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn github_webhook_ping_returns_ok_without_side_effects() {
+        let key = vec![9u8; 32];
+        let source_id = Uuid::new_v4();
+        let workspace_id = Uuid::new_v4();
+        let secret = encrypt_secret(&key, "secret").expect("encrypt");
+        let source = webhook_source_fixture(source_id, workspace_id, secret);
+        let repo = StubWebhookSourceRepo {
+            source: Some(source),
+            ..Default::default()
+        };
+        let subscription_repo = StubWebhookSubscriptionRepo::default();
+        let workflow_repo = MockWorkflowRepository::new();
+        let dedupe_repo = StubWebhookIngressDedupeRepo::default();
+        let delivery_repo = StubWebhookDeliveryRepo::default();
+        let app_state = default_app_state();
+
+        let subscription_context = SubscriptionContext {
+            _subscription_id: Uuid::new_v4(),
+            webhook_source_id: source_id,
+            workspace_id,
+        };
+
+        let body = b"not-json";
+        let signature = sign_github_payload("secret", body);
+        let mut headers = HeaderMap::new();
+        headers.insert(GITHUB_EVENT_HEADER, "ping".parse().unwrap());
+        headers.insert(
+            GITHUB_SIGNATURE_HEADER,
+            format!("sha256={}", signature).parse().unwrap(),
+        );
+
+        let verification_headers =
+            vec![(GITHUB_EVENT_HEADER.to_string(), Some("ping".to_string()))];
+
+        let response = invoke_handle_github_webhook_ingress_with_payload(
+            &app_state,
+            &dedupe_repo,
+            &delivery_repo,
+            &repo,
+            &subscription_repo,
+            &workflow_repo,
+            WebhookIngressDedupeMode::Off,
+            &key,
+            &subscription_context,
+            &headers,
+            body,
+            &[],
+            &verification_headers,
+            OffsetDateTime::now_utc(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(repo.last_seen.lock().unwrap().is_none());
+        assert!(delivery_repo.deliveries.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn github_webhook_event_type_derived_from_header() {
+        let key = vec![9u8; 32];
+        let source_id = Uuid::new_v4();
+        let workspace_id = Uuid::new_v4();
+        let secret = encrypt_secret(&key, "secret").expect("encrypt");
+        let source = webhook_source_fixture(source_id, workspace_id, secret);
+        let repo = StubWebhookSourceRepo {
+            source: Some(source),
+            ..Default::default()
+        };
+        let subscription_repo = RecordingWebhookSubscriptionRepo::default();
+        let workflow_repo = MockWorkflowRepository::new();
+        let dedupe_repo = StubWebhookIngressDedupeRepo::default();
+        let delivery_repo = StubWebhookDeliveryRepo::default();
+        let app_state = default_app_state();
+
+        let subscription_context = SubscriptionContext {
+            _subscription_id: Uuid::new_v4(),
+            webhook_source_id: source_id,
+            workspace_id,
+        };
+
+        let body = br#"{"action":"opened","event_type":"github.push"}"#;
+        let signature = sign_github_payload("secret", body);
+        let mut headers = HeaderMap::new();
+        headers.insert(GITHUB_EVENT_HEADER, "issues".parse().unwrap());
+        headers.insert(
+            GITHUB_SIGNATURE_HEADER,
+            format!("sha256={}", signature).parse().unwrap(),
+        );
+
+        let response = invoke_handle_github_webhook_ingress_with_payload(
+            &app_state,
+            &dedupe_repo,
+            &delivery_repo,
+            &repo,
+            &subscription_repo,
+            &workflow_repo,
+            WebhookIngressDedupeMode::Off,
+            &key,
+            &subscription_context,
+            &headers,
+            body,
+            &[],
+            &[],
+            OffsetDateTime::now_utc(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let requested = subscription_repo.requested_event_types.lock().unwrap();
+        assert_eq!(requested.as_slice(), ["github.issues.opened"]);
     }
 
     #[tokio::test]

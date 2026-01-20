@@ -1,0 +1,153 @@
+{
+  "action_id": "github.action",
+  "executor": "http",
+  "ui": {
+    "label": "GitHub",
+    "description": "Run GitHub repository actions.",
+    "category": "GitHub",
+    "icon": "github"
+  },
+  "inputs": [
+    {
+      "name": "connection",
+      "label": "GitHub account",
+      "type": "oauth_connection",
+      "provider": "github",
+      "connection_scopes": ["personal", "workspace"],
+      "required": true
+    },
+    {
+      "name": "operation",
+      "label": "Operation",
+      "type": "enum",
+      "options": [
+        "create_issue",
+        "create_issue_comment",
+        "add_labels_to_issue",
+        "create_pull_request",
+        "create_release",
+        "dispatch_workflow"
+      ],
+      "required": true
+    },
+    {
+      "name": "owner",
+      "label": "Repository owner",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "repo",
+      "label": "Repository name",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "title",
+      "label": "Title",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "body",
+      "label": "Body",
+      "type": "string",
+      "required": false
+    },
+    {
+      "name": "issue_number",
+      "label": "Issue number",
+      "type": "number",
+      "required": true
+    },
+    {
+      "name": "labels",
+      "label": "Labels",
+      "type": "string[]",
+      "required": true
+    },
+    {
+      "name": "head",
+      "label": "Head branch",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "base",
+      "label": "Base branch",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "draft",
+      "label": "Draft",
+      "type": "boolean",
+      "required": false
+    },
+    {
+      "name": "tag_name",
+      "label": "Tag name",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "name",
+      "label": "Release name",
+      "type": "string",
+      "required": false
+    },
+    {
+      "name": "prerelease",
+      "label": "Prerelease",
+      "type": "boolean",
+      "required": false
+    },
+    {
+      "name": "workflow_id",
+      "label": "Workflow ID or filename",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "ref",
+      "label": "Git ref",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "inputs",
+      "label": "Workflow inputs",
+      "type": "object",
+      "required": false
+    }
+  ],
+  "http": {
+    "method": "{{params._method}}",
+    "url": "{{params._url}}",
+    "headers": [
+      {
+        "key": "Authorization",
+        "value": "Bearer {{connection.access_token}}"
+      },
+      {
+        "key": "Accept",
+        "value": "application/vnd.github+json"
+      },
+      {
+        "key": "User-Agent",
+        "value": "DSentr"
+      },
+      {
+        "key": "Content-Type",
+        "value": "application/json"
+      }
+    ],
+    "queryParams": [],
+    "bodyType": "json",
+    "body": "{{params._body}}",
+    "formBody": []
+  },
+  "egress": {
+    "allow": ["api.github.com"]
+  }
+}

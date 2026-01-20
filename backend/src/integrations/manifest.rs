@@ -73,4 +73,7 @@ pub struct UiMetadata {
 #[derive(Debug, Clone)]
 pub struct OAuthMetadata {
     pub scopes: Vec<String>,
+    pub github_app: bool,
+    pub user_tokens_optional: bool,
+    pub installation_scoped: bool,
 }

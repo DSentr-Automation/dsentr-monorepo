@@ -60,3 +60,6 @@
 - Tightened HTTP action templating so methods and URLs render/validate explicitly, and added a debug log for resolved method/host with allowlist mode.
 - Action manifest inputs now allow more field types with optional min/max metadata and enforce enum/number validation plus schema updates.
 - Action manifest input validation now rejects options/min-max on non-enum or non-number inputs to keep manifests strict.
+- Action test configs now include GitHub OAuth settings so Config stubs compile with the expanded provider list.
+- Action test configs now include GitHub App settings so GitHub App invariants are represented in executor fixtures.
+- Action manifest registry tests now assert the single GitHub action manifest and operation enum load from the embedded JSON catalog.

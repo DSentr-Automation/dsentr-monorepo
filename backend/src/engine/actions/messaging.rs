@@ -2520,6 +2520,11 @@ mod tests {
                     client_secret: "stub".into(),
                     redirect_uri: "http://localhost".into(),
                 },
+                github: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
+                },
                 microsoft: OAuthProviderConfig {
                     client_id: "stub".into(),
                     client_secret: "stub".into(),
@@ -2552,6 +2557,7 @@ mod tests {
                 },
                 token_encryption_key: vec![0u8; 32],
             },
+            github_app: crate::config::GitHubAppSettings::default(),
             api_secrets_encryption_key: vec![1u8; 32],
             stripe: StripeSettings {
                 client_id: "stub".into(),
@@ -3044,6 +3050,7 @@ mod tests {
             Arc::clone(&encryption_key),
             Arc::new(Client::new()),
             &config.oauth,
+            &config.github_app,
         ));
 
         let mut state = build_state_with_oauth(
@@ -3233,6 +3240,7 @@ mod tests {
             Arc::clone(&encryption_key),
             Arc::new(Client::new()),
             &config.oauth,
+            &config.github_app,
         );
         oauth_accounts.set_refresh_override(Some(Arc::new(
             move |provider: ConnectedOAuthProvider, refresh_token: &str| {
@@ -3418,6 +3426,7 @@ mod tests {
             Arc::clone(&encryption_key),
             Arc::new(Client::new()),
             &config.oauth,
+            &config.github_app,
         );
         oauth_accounts.set_refresh_override(Some(Arc::new(
             move |provider: ConnectedOAuthProvider, refresh_token: &str| {
@@ -3662,6 +3671,7 @@ mod tests {
             Arc::clone(&encryption_key),
             Arc::new(Client::new()),
             &config.oauth,
+            &config.github_app,
         ));
 
         let mut state = build_state_with_oauth(
@@ -4178,6 +4188,7 @@ mod tests {
             Arc::clone(&encryption_key),
             Arc::new(Client::new()),
             &config.oauth,
+            &config.github_app,
         ));
 
         let workspace_token_refresher: Arc<dyn WorkspaceTokenRefresher> =
@@ -4837,6 +4848,7 @@ mod tests {
             Arc::clone(&encryption_key),
             Arc::new(Client::new()),
             &config.oauth,
+            &config.github_app,
         ));
 
         let mut state = build_state_with_oauth(
@@ -4969,6 +4981,7 @@ mod tests {
             Arc::clone(&encryption_key),
             Arc::new(Client::new()),
             &config.oauth,
+            &config.github_app,
         ));
 
         let mut state = build_state_with_oauth(

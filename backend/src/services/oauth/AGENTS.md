@@ -48,3 +48,6 @@
 - Added Notion OAuth exchange/refresh handling with token metadata capture (workspace/bot/owner) and provider user id dedupe so Notion connections persist like other providers.
 - Fixed a duplicated OAuth account service block that broke compilation, restoring the single `store_authorization` flow for token persistence.
 - Notion OAuth exchange now preserves owner metadata for provider id derivation without moving values, fixing borrow-check failures.
+- Added GitHub OAuth exchange/refresh handling and account labeling so GitHub connections can be stored alongside existing providers.
+- GitHub OAuth handling now enforces GitHub App user-token invariants (optional refresh, user-only tokens) with endpoint overrides and tests for refresh gating and refreshless connects.
+- GitHub OAuth exchange now warns when refresh is enabled but no refresh_token is returned so misconfigured GitHub App user OAuth settings are visible.

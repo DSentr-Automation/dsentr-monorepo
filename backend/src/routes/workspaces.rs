@@ -3705,6 +3705,11 @@ mod tests {
                     client_secret: "secret".into(),
                     redirect_uri: "https://app.example.com/oauth/google".into(),
                 },
+                github: OAuthProviderConfig {
+                    client_id: "client".into(),
+                    client_secret: "secret".into(),
+                    redirect_uri: "https://app.example.com/oauth/github".into(),
+                },
                 microsoft: OAuthProviderConfig {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
@@ -3737,6 +3742,7 @@ mod tests {
                 },
                 token_encryption_key: vec![0; 32],
             },
+            github_app: crate::config::GitHubAppSettings::default(),
             api_secrets_encryption_key: vec![1; 32],
             stripe: StripeSettings {
                 client_id: "stub".into(),

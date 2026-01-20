@@ -22,3 +22,4 @@
 - Removed the legacy workflow webhook secret runbook after deprecating workflow-scoped webhook tokens.
 - Added an action registry note covering manifests, execution semantics, and no-branching rules for engine dispatch.
 - Added an integrations manifest guide so backend updates follow the manifest contract and avoid provider-specific routing changes.
+- Documented GitHub OAuth redirect settings and webhook ingress requirements so setup matches the GitHub App integration.

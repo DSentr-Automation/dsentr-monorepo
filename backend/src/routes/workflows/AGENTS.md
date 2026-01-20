@@ -40,3 +40,5 @@
 - Workflow run test AppState fixtures now include the integration registry to match the expanded shared state.
 - Workflow plan violation messages now use ASCII punctuation to fix encoding corruption.
 - Workflow run snapshots now normalize egress allowlists to trimmed host entries before enqueueing.
+- Workflow route test configs now seed GitHub OAuth settings so Config stubs compile with the expanded provider set.
+- Workflow route test configs now seed GitHub App settings so GitHub App invariants are exercised in route fixtures.

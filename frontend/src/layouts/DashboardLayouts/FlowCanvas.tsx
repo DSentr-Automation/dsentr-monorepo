@@ -1414,13 +1414,85 @@ function FlyoutActionFields({
     [actionDefinition.inputs]
   )
   const managesDynamicInputs = !actionDefinition.fieldsComponent
+  const getVisibleInputs = useMemo(() => {
+    if (!managesDynamicInputs) {
+      return allInputs
+    }
+
+    const actionType = actionDefinition.actionType
+    if (actionType !== 'raindrop.bookmark' && actionType !== 'github.action') {
+      return allInputs
+    }
+
+    const operation = controller.params?.operation as string
+    if (!operation) return allInputs
+
+    if (actionType === 'raindrop.bookmark') {
+      const alwaysVisible = ['connection', 'operation']
+      const operationFields: Record<string, string[]> = {
+        create: ['url', 'title', 'tags', 'excerpt'],
+        update: ['bookmark_id', 'title', 'tags', 'excerpt'],
+        delete: ['bookmark_id']
+      }
+
+      const visibleFields = new Set([
+        ...alwaysVisible,
+        ...(operationFields[operation] || [])
+      ])
+
+      return allInputs.filter((input) => visibleFields.has(input.name))
+    }
+
+    const alwaysVisible = ['connection', 'operation', 'owner', 'repo']
+    const operationFields: Record<string, string[]> = {
+      create_issue: ['title', 'body'],
+      create_issue_comment: ['issue_number', 'body'],
+      add_labels_to_issue: ['issue_number', 'labels'],
+      create_pull_request: ['title', 'head', 'base', 'body', 'draft'],
+      create_release: ['tag_name', 'name', 'body', 'draft', 'prerelease'],
+      dispatch_workflow: ['workflow_id', 'ref', 'inputs']
+    }
+
+    const visibleFields = new Set([
+      ...alwaysVisible,
+      ...(operationFields[operation] || [])
+    ])
+    const visibleInputs = allInputs.filter((input) =>
+      visibleFields.has(input.name)
+    )
+
+    const requiredByOperation: Record<string, string[]> = {
+      create_issue: ['title'],
+      create_issue_comment: ['issue_number', 'body'],
+      add_labels_to_issue: ['issue_number', 'labels'],
+      create_pull_request: ['title', 'head', 'base'],
+      create_release: ['tag_name'],
+      dispatch_workflow: ['workflow_id', 'ref']
+    }
+
+    const requiredFields = new Set([
+      ...alwaysVisible,
+      ...(requiredByOperation[operation] || [])
+    ])
+
+    return visibleInputs.map((input) => {
+      const shouldRequire = requiredFields.has(input.name)
+      if (input.required === shouldRequire) return input
+      return { ...input, required: shouldRequire }
+    })
+  }, [
+    managesDynamicInputs,
+    actionDefinition.actionType,
+    controller.params?.operation,
+    allInputs
+  ])
   const requiredInputMissing = useMemo(
     () =>
       managesDynamicInputs &&
-      allInputs.some((input) =>
+      getVisibleInputs.some((input) =>
         isRequiredInputMissing(input, controller.params)
       ),
-    [controller.params, managesDynamicInputs, allInputs]
+    [controller.params, managesDynamicInputs, getVisibleInputs]
   )
   const currentInputErrors = Boolean(nodeData?.hasValidationErrors)
   useEffect(() => {
@@ -1533,6 +1605,204 @@ function FlyoutActionFields({
     controller.params?.excerpt
   ])
 
+  // Operation-to-execution param mapping for GitHub
+  useEffect(() => {
+    if (!managesDynamicInputs) return
+    if (actionDefinition.actionType !== 'github.action') return
+
+    const operation = controller.params?.operation as string
+    if (!operation) return
+
+    const readParamString = (value: unknown) => {
+      if (typeof value === 'string') return value
+      if (value == null) return ''
+      return String(value)
+    }
+    const readOptionalString = (value: unknown) => {
+      const text = readParamString(value).trim()
+      return text.length > 0 ? text : undefined
+    }
+    const readOptionalBoolean = (value: unknown) => {
+      if (typeof value === 'boolean') return value
+      if (typeof value === 'string') {
+        const lowered = value.trim().toLowerCase()
+        if (lowered === 'true') return true
+        if (lowered === 'false') return false
+      }
+      return undefined
+    }
+    const readOptionalObject = (value: unknown) => {
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const keys = Object.keys(value as Record<string, unknown>)
+        if (keys.length > 0) {
+          return value as Record<string, unknown>
+        }
+      }
+      return undefined
+    }
+
+    const owner = readParamString(controller.params?.owner)
+    const repo = readParamString(controller.params?.repo)
+    const issueNumber = readParamString(controller.params?.issue_number)
+    const workflowId = readParamString(controller.params?.workflow_id)
+
+    let executionParams: Record<string, unknown> = {}
+
+    switch (operation) {
+      case 'create_issue': {
+        const payload: Record<string, unknown> = {
+          title: readParamString(controller.params?.title)
+        }
+        const body = readOptionalString(controller.params?.body)
+        if (body) {
+          payload.body = body
+        }
+
+        executionParams = {
+          _method: 'POST',
+          _url: `https://api.github.com/repos/${owner}/${repo}/issues`,
+          _body: payload
+        }
+        break
+      }
+      case 'create_issue_comment': {
+        executionParams = {
+          _method: 'POST',
+          _url: `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}/comments`,
+          _body: {
+            body: readParamString(controller.params?.body)
+          }
+        }
+        break
+      }
+      case 'add_labels_to_issue': {
+        const labels = Array.isArray(controller.params?.labels)
+          ? controller.params?.labels
+          : []
+        executionParams = {
+          _method: 'POST',
+          _url: `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}/labels`,
+          _body: {
+            labels
+          }
+        }
+        break
+      }
+      case 'create_pull_request': {
+        const payload: Record<string, unknown> = {
+          title: readParamString(controller.params?.title),
+          head: readParamString(controller.params?.head),
+          base: readParamString(controller.params?.base)
+        }
+        const body = readOptionalString(controller.params?.body)
+        if (body) {
+          payload.body = body
+        }
+        const draft = readOptionalBoolean(controller.params?.draft)
+        if (typeof draft === 'boolean') {
+          payload.draft = draft
+        }
+
+        executionParams = {
+          _method: 'POST',
+          _url: `https://api.github.com/repos/${owner}/${repo}/pulls`,
+          _body: payload
+        }
+        break
+      }
+      case 'create_release': {
+        const payload: Record<string, unknown> = {
+          tag_name: readParamString(controller.params?.tag_name)
+        }
+        const name = readOptionalString(controller.params?.name)
+        if (name) {
+          payload.name = name
+        }
+        const body = readOptionalString(controller.params?.body)
+        if (body) {
+          payload.body = body
+        }
+        const draft = readOptionalBoolean(controller.params?.draft)
+        if (typeof draft === 'boolean') {
+          payload.draft = draft
+        }
+        const prerelease = readOptionalBoolean(controller.params?.prerelease)
+        if (typeof prerelease === 'boolean') {
+          payload.prerelease = prerelease
+        }
+
+        executionParams = {
+          _method: 'POST',
+          _url: `https://api.github.com/repos/${owner}/${repo}/releases`,
+          _body: payload
+        }
+        break
+      }
+      case 'dispatch_workflow': {
+        const payload: Record<string, unknown> = {
+          ref: readParamString(controller.params?.ref)
+        }
+        const inputs = readOptionalObject(controller.params?.inputs)
+        if (inputs) {
+          payload.inputs = inputs
+        }
+
+        executionParams = {
+          _method: 'POST',
+          _url: `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${workflowId}/dispatches`,
+          _body: payload
+        }
+        break
+      }
+      default:
+        return
+    }
+
+    const bodyMatches = (current: unknown, next: unknown) => {
+      const normalize = (value: unknown) => {
+        if (value == null) return ''
+        if (typeof value === 'string') return value
+        try {
+          return JSON.stringify(value)
+        } catch {
+          return ''
+        }
+      }
+      return normalize(current) === normalize(next)
+    }
+
+    const needsUpdate = Object.keys(executionParams).some((key) => {
+      if (key === '_body') {
+        return !bodyMatches(controller.params?._body, executionParams._body)
+      }
+      return controller.params?.[key] !== executionParams[key]
+    })
+
+    if (needsUpdate) {
+      controller.updateParams(executionParams, { markDirty: false })
+    }
+  }, [
+    controller,
+    managesDynamicInputs,
+    actionDefinition.actionType,
+    controller.params?.operation,
+    controller.params?.owner,
+    controller.params?.repo,
+    controller.params?.title,
+    controller.params?.body,
+    controller.params?.issue_number,
+    controller.params?.labels,
+    controller.params?.head,
+    controller.params?.base,
+    controller.params?.draft,
+    controller.params?.tag_name,
+    controller.params?.name,
+    controller.params?.prerelease,
+    controller.params?.workflow_id,
+    controller.params?.ref,
+    controller.params?.inputs
+  ])
+
   // Set default operation for Raindrop when none is selected
   useEffect(() => {
     if (!managesDynamicInputs) return
@@ -1559,35 +1829,25 @@ function FlyoutActionFields({
     allInputs
   ])
 
-  // Field visibility logic based on operation
-  const getVisibleInputs = useMemo(() => {
-    if (
-      !managesDynamicInputs ||
-      actionDefinition.actionType !== 'raindrop.bookmark'
-    ) {
-      return allInputs
-    }
+  // Set default operation for GitHub when none is selected
+  useEffect(() => {
+    if (!managesDynamicInputs) return
+    if (actionDefinition.actionType !== 'github.action') return
 
     const operation = controller.params?.operation as string
-    if (!operation) return allInputs
+    if (operation) return
 
-    // Always show connection and operation inputs
-    const alwaysVisible = ['connection', 'operation']
-
-    // Field visibility by operation
-    const operationFields: Record<string, string[]> = {
-      create: ['url', 'title', 'tags', 'excerpt'],
-      update: ['bookmark_id', 'title', 'tags', 'excerpt'],
-      delete: ['bookmark_id']
+    const operationInput = allInputs.find(
+      (input) => input.name === 'operation' && input.type === 'enum'
+    )
+    if (operationInput?.options?.[0]) {
+      controller.updateParams(
+        { operation: operationInput.options[0] },
+        { markDirty: false }
+      )
     }
-
-    const visibleFields = new Set([
-      ...alwaysVisible,
-      ...(operationFields[operation] || [])
-    ])
-
-    return allInputs.filter((input) => visibleFields.has(input.name))
   }, [
+    controller,
     managesDynamicInputs,
     actionDefinition.actionType,
     controller.params?.operation,

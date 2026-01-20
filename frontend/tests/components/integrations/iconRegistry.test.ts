@@ -4,6 +4,7 @@ import {
   getIntegrationIcon
 } from '@/components/integrations/iconRegistry'
 import BitlyIcon from '@/assets/svg-components/third-party/BitlyIcon'
+import GitHubIcon from '@/assets/svg-components/third-party/GitHubIcon'
 import RaindropIcon from '@/assets/svg-components/third-party/RaindropIcon'
 import SlackIcon from '@/assets/svg-components/third-party/SlackIcon'
 
@@ -20,6 +21,10 @@ describe('Integration Icon Registry', () => {
     expect(INTEGRATION_ICONS.slack).toBe(SlackIcon)
   })
 
+  it('should export GitHub icon in the registry', () => {
+    expect(INTEGRATION_ICONS.github).toBe(GitHubIcon)
+  })
+
   it('should resolve existing icon by key', () => {
     const IconComponent = getIntegrationIcon('bitly')
     expect(IconComponent).toBe(BitlyIcon)
@@ -33,6 +38,11 @@ describe('Integration Icon Registry', () => {
   it('should resolve existing icon with case normalization', () => {
     const IconComponent = getIntegrationIcon('BITLY')
     expect(IconComponent).toBe(BitlyIcon)
+  })
+
+  it('should resolve GitHub icon by key', () => {
+    const IconComponent = getIntegrationIcon('github')
+    expect(IconComponent).toBe(GitHubIcon)
   })
 
   it('should resolve existing raindrop icon with case normalization', () => {

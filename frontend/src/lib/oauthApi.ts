@@ -4,6 +4,7 @@ import { useAuth } from '@/stores/auth'
 
 export type OAuthProvider =
   | 'google'
+  | 'github'
   | 'microsoft'
   | 'slack'
   | 'asana'

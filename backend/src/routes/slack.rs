@@ -804,6 +804,11 @@ mod tests {
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/google".into(),
                 },
+                github: OAuthProviderConfig {
+                    client_id: "client".into(),
+                    client_secret: "secret".into(),
+                    redirect_uri: "http://localhost/github".into(),
+                },
                 microsoft: OAuthProviderConfig {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
@@ -836,6 +841,7 @@ mod tests {
                 },
                 token_encryption_key: vec![0u8; 32],
             },
+            github_app: crate::config::GitHubAppSettings::default(),
             api_secrets_encryption_key: vec![1u8; 32],
             stripe: StripeSettings {
                 client_id: "stub".into(),
@@ -898,6 +904,7 @@ mod tests {
                 Arc::clone(&encryption_key),
                 http_client.clone(),
                 &config.oauth,
+                &config.github_app,
             ),
         );
         let workspace_token_refresher: Arc<dyn WorkspaceTokenRefresher> =
@@ -1537,6 +1544,7 @@ mod tests {
             Arc::clone(&encryption_key),
             http_client.clone(),
             &config.oauth,
+            &config.github_app,
         );
         oauth_accounts.set_refresh_override(Some(Arc::new(
             move |provider: ConnectedOAuthProvider, _refresh: &str| {
@@ -1915,6 +1923,7 @@ mod tests {
                 Arc::clone(&encryption_key),
                 http_client.clone(),
                 &config.oauth,
+                &config.github_app,
             ),
         );
 

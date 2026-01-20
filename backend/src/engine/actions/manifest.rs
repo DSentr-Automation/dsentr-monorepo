@@ -296,8 +296,8 @@ fn validate_inputs(inputs: &[ActionInput]) -> Result<(), String> {
         }
         let normalized_type = field_type.to_ascii_lowercase();
         match normalized_type.as_str() {
-            "string" | "enum" | "oauth_connection" | "number" | "boolean" | "string[]" | "object" => {
-            }
+            "string" | "enum" | "oauth_connection" | "number" | "boolean" | "string[]"
+            | "object" => {}
             _ => {
                 return Err(format!(
                     "inputs.{}.type `{}` is not supported",
@@ -314,14 +314,9 @@ fn validate_inputs(inputs: &[ActionInput]) -> Result<(), String> {
                 .options
                 .as_ref()
                 .filter(|values| !values.is_empty())
-                .ok_or_else(|| {
-                    format!("inputs.{}.options is required for enum type", name)
-                })?;
+                .ok_or_else(|| format!("inputs.{}.options is required for enum type", name))?;
             if options.iter().any(|value| value.trim().is_empty()) {
-                return Err(format!(
-                    "inputs.{}.options entries cannot be empty",
-                    name
-                ));
+                return Err(format!("inputs.{}.options entries cannot be empty", name));
             }
         } else if input.options.is_some() {
             return Err(format!(
@@ -350,10 +345,7 @@ fn validate_inputs(inputs: &[ActionInput]) -> Result<(), String> {
         if normalized_type == "number" {
             if let (Some(min), Some(max)) = (input.min, input.max) {
                 if min > max {
-                    return Err(format!(
-                        "inputs.{}.min cannot be greater than max",
-                        name
-                    ));
+                    return Err(format!("inputs.{}.min cannot be greater than max", name));
                 }
             }
         }
@@ -704,5 +696,44 @@ mod tests {
 
         let err = validate_manifest(&manifest).expect_err("min/max should be rejected");
         assert!(err.contains("min/max is only valid for number"));
+    }
+
+    #[test]
+    fn action_registry_includes_github_action_manifest() {
+        let registry = action_manifest_registry();
+        let github_entries: Vec<_> = registry
+            .entries()
+            .iter()
+            .filter(|entry| entry.action_id.starts_with("github."))
+            .collect();
+
+        assert_eq!(github_entries.len(), 1);
+        assert_eq!(github_entries[0].action_id, "github.action");
+
+        let operation_input = github_entries[0]
+            .inputs
+            .iter()
+            .find(|input| input.name == "operation")
+            .and_then(|input| input.options.as_ref())
+            .expect("github.action should define operation options");
+
+        let expected = [
+            "create_issue",
+            "create_issue_comment",
+            "add_labels_to_issue",
+            "create_pull_request",
+            "create_release",
+            "dispatch_workflow",
+        ];
+
+        // GitHub workflow dispatch returns 204 No Content; the HTTP executor
+        // already treats empty bodies as empty strings, so no custom handling
+        // is required in the manifest.
+        for option in expected {
+            assert!(
+                operation_input.iter().any(|value| value == option),
+                "missing GitHub operation option: {option}"
+            );
+        }
     }
 }

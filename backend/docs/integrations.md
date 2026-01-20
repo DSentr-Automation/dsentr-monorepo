@@ -60,6 +60,15 @@ Constraints and semantics:
 
 These checks are enforced generically by constraints and ownership rules; Slack is just the current manifest that sets them.
 
+## GitHub webhook ingress
+GitHub webhooks are supported as a GitHub App webhook feed. Webhook subscriptions are stored in DSentr and drive trigger matching.
+
+- Webhook URL format: `/api/webhooks/github/{subscription_id}`
+- Required events: `issues`, `issue_comment`, `pull_request`, `push`, `release`
+- Signature secret: GitHub sends `X-Hub-Signature-256` using the subscription secret; DSentr rejects mismatches with `401`
+- Event type mapping: DSentr uses the `X-GitHub-Event` header (`github.<event>`), and appends `.action` when the payload includes an action (for example, `github.issues.opened`)
+- Payload event fields are ignored for event type derivation
+
 ## Adding a new integration
 Step-by-step:
 1. Add a new manifest entry in `build_integration_registry` with the correct `integration_id`, `auth_type`, `token_scope`, `ownership_model`, `provider_constraints`, `ui_metadata`, and (if OAuth) `oauth_metadata`.

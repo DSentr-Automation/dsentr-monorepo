@@ -52,3 +52,5 @@
 - OAuth route test configs no longer require `WEBHOOK_SECRET` after removing workflow-scoped webhook settings.
 - OAuth route test fixtures now include the integration registry in AppState to stay aligned with shared state wiring.
 - OAuth routes now resolve integrations by ID, map OAuth providers in a routing-local helper, return flat connection arrays, and include manifest metadata plus a generic personal-auth map for workspace-first integrations.
+- Auth route tests now seed GitHub OAuth settings in config stubs to keep OAuth providers aligned across auth fixtures.
+- Auth route test configs now include GitHub App settings to satisfy updated Config construction and GitHub App validation paths.

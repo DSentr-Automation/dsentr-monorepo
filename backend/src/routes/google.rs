@@ -536,6 +536,11 @@ mod tests {
                     client_secret: "secret".into(),
                     redirect_uri: "http://localhost/google".into(),
                 },
+                github: OAuthProviderConfig {
+                    client_id: "client".into(),
+                    client_secret: "secret".into(),
+                    redirect_uri: "http://localhost/github".into(),
+                },
                 microsoft: OAuthProviderConfig {
                     client_id: "client".into(),
                     client_secret: "secret".into(),
@@ -568,6 +573,7 @@ mod tests {
                 },
                 token_encryption_key: vec![1u8; 32],
             },
+            github_app: crate::config::GitHubAppSettings::default(),
             api_secrets_encryption_key: vec![2u8; 32],
             stripe: StripeSettings {
                 client_id: "stub".into(),
@@ -647,6 +653,7 @@ mod tests {
             Arc::clone(&encryption_key),
             Arc::new(Client::new()),
             &config.oauth,
+            &config.github_app,
         ));
         let state = base_state(config, oauth_accounts);
 
@@ -692,6 +699,7 @@ mod tests {
             Arc::clone(&encryption_key),
             Arc::new(Client::new()),
             &config.oauth,
+            &config.github_app,
         ));
         let state = base_state(config, oauth_accounts);
 

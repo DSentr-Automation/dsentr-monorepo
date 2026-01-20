@@ -106,3 +106,6 @@
 - Added a read-only `/api/actions` route that returns the action manifest catalog for frontend discovery without exposing secrets.
 - Route test AppState builders now include the integration registry to match the expanded shared state.
 - Webhook run snapshots now normalize workflow egress allowlists to vetted host entries before enqueueing.
+- Route-level test configs now seed GitHub OAuth settings so shared Config builders stay aligned with OAuth providers.
+- Route test configs now include GitHub App settings to keep updated OAuth wiring and GitHub App validation consistent.
+- Added GitHub App webhook ingress at `/api/webhooks/github/:subscription_id` with signature verification, header-derived event types, and ping short-circuiting to align GitHub webhooks with the existing ingress pipeline.

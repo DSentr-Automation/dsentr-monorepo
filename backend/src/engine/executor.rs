@@ -1129,6 +1129,7 @@ mod tests {
     use crate::db::mock_stripe_event_log_repository::MockStripeEventLogRepository;
     use crate::db::workflow_repository::{MockWorkflowRepository, WorkflowRepository};
     use crate::db::workspace_connection_repository::NoopWorkspaceConnectionRepository;
+    use crate::engine::actions::action_manifest_registry;
     use crate::engine::actions::registry::{
         ActionExecutionResult, ActionExecutionSemantics, ActionExecutor, ActionRuntimeContext,
         HttpExecutor,
@@ -1215,6 +1216,11 @@ mod tests {
                     client_secret: "stub".into(),
                     redirect_uri: "http://localhost".into(),
                 },
+                github: OAuthProviderConfig {
+                    client_id: "stub".into(),
+                    client_secret: "stub".into(),
+                    redirect_uri: "http://localhost".into(),
+                },
                 microsoft: OAuthProviderConfig {
                     client_id: "stub".into(),
                     client_secret: "stub".into(),
@@ -1247,6 +1253,7 @@ mod tests {
                 },
                 token_encryption_key: vec![0u8; 32],
             },
+            github_app: crate::config::GitHubAppSettings::default(),
             api_secrets_encryption_key: vec![1u8; 32],
             stripe: StripeSettings {
                 client_id: "stub".into(),
@@ -1426,6 +1433,25 @@ mod tests {
         }
     }
 
+    fn hydrate_http_manifest(snapshot: &mut Value, action_type: &str) {
+        let Some(http_manifest) = action_manifest_registry().get_http_manifest(action_type) else {
+            return;
+        };
+        let Ok(http_json) = serde_json::to_value(http_manifest) else {
+            return;
+        };
+        let Some(nodes) = snapshot.get_mut("nodes").and_then(|n| n.as_array_mut()) else {
+            return;
+        };
+        let Some(node) = nodes.first_mut() else {
+            return;
+        };
+        let Some(data) = node.get_mut("data").and_then(|d| d.as_object_mut()) else {
+            return;
+        };
+        data.insert("http".to_string(), http_json);
+    }
+
     fn dummy_node_run(
         run_id: Uuid,
         status: &str,
@@ -1512,6 +1538,164 @@ mod tests {
 
         mock.assert();
         assert_eq!(outputs.get("status").and_then(|v| v.as_u64()), Some(200));
+    }
+
+    #[tokio::test]
+    async fn github_action_create_issue_executes_with_bearer_token() {
+        let server = MockServer::start();
+        let issue_body = serde_json::to_string(&json!({
+            "title": "Bug report",
+            "body": "Steps to reproduce"
+        }))
+        .expect("serialize issue body");
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/repos/octo/example/issues")
+                .header("authorization", "Bearer github-token")
+                .json_body(json!({
+                    "title": "Bug report",
+                    "body": "Steps to reproduce"
+                }));
+            then.status(201).json_body(json!({"id": 1}));
+        });
+
+        let mut run = base_run(
+            "action",
+            json!({
+                "label": "GitHub",
+                "actionType": "github.action",
+                "inputs": {
+                    "operation": "create_issue",
+                    "owner": "octo",
+                    "repo": "example",
+                    "title": "Bug report",
+                    "body": "Steps to reproduce"
+                },
+                "params": {
+                    "_method": "POST",
+                    "_url": server.url("/repos/octo/example/issues"),
+                    "_body": issue_body
+                }
+            }),
+        );
+        hydrate_http_manifest(&mut run.snapshot, "github.action");
+
+        let graph = Graph::from_snapshot(&run.snapshot).expect("graph should build");
+        let node = graph.nodes.get("node-1").expect("node should exist");
+        let mut context = Map::new();
+        context.insert("params".to_string(), merged_node_params(node));
+        context.insert(
+            "connection".to_string(),
+            json!({
+                "access_token": "github-token"
+            }),
+        );
+        let context_value = Value::Object(context);
+
+        let state = build_state(MockWorkflowRepository::new());
+        let executor = HttpExecutor;
+        let runtime = ActionRuntimeContext {
+            node,
+            context: &context_value,
+            allowed_hosts: &[],
+            disallowed_hosts: &[],
+            default_deny: false,
+            is_prod: false,
+            state: &state,
+            run: &run,
+        };
+
+        let result = executor.execute(runtime).await.expect("http should run");
+        let outputs = match result {
+            ActionExecutionResult::Immediate { outputs, .. } => outputs,
+            _ => panic!("expected immediate result"),
+        };
+
+        mock.assert();
+        assert_eq!(outputs.get("status").and_then(|v| v.as_u64()), Some(201));
+    }
+
+    #[tokio::test]
+    async fn github_action_dispatch_workflow_allows_empty_body() {
+        let server = MockServer::start();
+        let dispatch_body = serde_json::to_string(&json!({
+            "ref": "main",
+            "inputs": {
+                "release": "2026.01"
+            }
+        }))
+        .expect("serialize workflow dispatch body");
+        let mock = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/repos/octo/example/actions/workflows/build.yml/dispatches")
+                .header("authorization", "Bearer github-token")
+                .json_body(json!({
+                    "ref": "main",
+                    "inputs": {
+                        "release": "2026.01"
+                    }
+                }));
+            then.status(204);
+        });
+
+        let mut run = base_run(
+            "action",
+            json!({
+                "label": "GitHub",
+                "actionType": "github.action",
+                "inputs": {
+                    "operation": "dispatch_workflow",
+                    "owner": "octo",
+                    "repo": "example",
+                    "workflow_id": "build.yml",
+                    "ref": "main",
+                    "inputs": {
+                        "release": "2026.01"
+                    }
+                },
+                "params": {
+                    "_method": "POST",
+                    "_url": server.url("/repos/octo/example/actions/workflows/build.yml/dispatches"),
+                    "_body": dispatch_body
+                }
+            }),
+        );
+        hydrate_http_manifest(&mut run.snapshot, "github.action");
+
+        let graph = Graph::from_snapshot(&run.snapshot).expect("graph should build");
+        let node = graph.nodes.get("node-1").expect("node should exist");
+        let mut context = Map::new();
+        context.insert("params".to_string(), merged_node_params(node));
+        context.insert(
+            "connection".to_string(),
+            json!({
+                "access_token": "github-token"
+            }),
+        );
+        let context_value = Value::Object(context);
+
+        let state = build_state(MockWorkflowRepository::new());
+        let executor = HttpExecutor;
+        let runtime = ActionRuntimeContext {
+            node,
+            context: &context_value,
+            allowed_hosts: &[],
+            disallowed_hosts: &[],
+            default_deny: false,
+            is_prod: false,
+            state: &state,
+            run: &run,
+        };
+
+        let result = executor.execute(runtime).await.expect("http should run");
+        let outputs = match result {
+            ActionExecutionResult::Immediate { outputs, .. } => outputs,
+            _ => panic!("expected immediate result"),
+        };
+
+        mock.assert();
+        assert_eq!(outputs.get("status").and_then(|v| v.as_u64()), Some(204));
+        assert_eq!(outputs.get("body"), Some(&Value::String(String::new())));
     }
 
     #[tokio::test]

@@ -7,6 +7,7 @@ use uuid::Uuid;
 #[serde(rename_all = "lowercase")]
 pub enum ConnectedOAuthProvider {
     Google,
+    GitHub,
     Microsoft,
     Slack,
     Asana,

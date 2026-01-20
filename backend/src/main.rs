@@ -66,7 +66,8 @@ use routes::{
     oauth::{
         asana_connect_callback, asana_connect_start, assert_oauth_provider_mappings,
         bitly_connect_callback, bitly_connect_start, disconnect_connection, get_connection_by_id,
-        google_connect_callback, google_connect_start, list_connections, list_provider_connections,
+        github_connect_callback, github_connect_start, google_connect_callback,
+        google_connect_start, list_connections, list_provider_connections,
         microsoft_connect_callback, microsoft_connect_start, notion_connect_callback,
         notion_connect_start, raindrop_connect_callback, raindrop_connect_start,
         refresh_connection, revoke_connection, slack_connect_callback, slack_connect_start,
@@ -79,9 +80,9 @@ use routes::{
     webhooks::{
         create_webhook_source, create_webhook_subscription, create_webhook_subscription_for_source,
         delete_webhook_source, delete_webhook_subscription, delete_webhook_subscription_by_id,
-        list_webhook_sources, list_webhook_subscriptions, list_webhook_subscriptions_for_source,
-        rotate_webhook_source_secret, update_webhook_source_enabled,
-        update_webhook_subscription_enabled, webhook_ingress,
+        github_webhook_ingress, list_webhook_sources, list_webhook_subscriptions,
+        list_webhook_subscriptions_for_source, rotate_webhook_source_secret,
+        update_webhook_source_enabled, update_webhook_subscription_enabled, webhook_ingress,
     },
     workflows::{
         cancel_all_runs_for_workflow, cancel_workflow_run, create_workflow, delete_workflow,
@@ -120,7 +121,7 @@ use crate::db::{
     workspace_repository::WorkspaceRepository,
 };
 use crate::engine::actions::init_action_manifest_registry;
-use crate::integrations::build_integration_registry;
+use crate::integrations::{assert_github_app_settings, build_integration_registry};
 use crate::routes::asana::get_task_details;
 use crate::services::pluggable_mailer::PluggableMailer;
 use crate::services::stripe::{LiveStripeService, StripeService};
@@ -321,6 +322,7 @@ async fn main() -> Result<()> {
         encryption_key.clone(),
         http_client_arc.clone(),
         &config.oauth,
+        &config.github_app,
     ));
     let workspace_token_refresher: Arc<dyn WorkspaceTokenRefresher> =
         oauth_accounts.clone() as Arc<dyn WorkspaceTokenRefresher>;
@@ -338,6 +340,7 @@ async fn main() -> Result<()> {
         tracing::error!(error = %error, "Failed to build integration registry");
         error
     })?);
+    assert_github_app_settings(config.as_ref(), integration_registry.as_ref());
     if let Err(message) = assert_oauth_provider_mappings(integration_registry.as_ref()) {
         tracing::error!(%message, "OAuth provider mapping validation failed");
         return Err(anyhow!(message));
@@ -661,6 +664,8 @@ async fn main() -> Result<()> {
     let oauth_public_routes = Router::new()
         .route("/google/start", get(google_connect_start))
         .route("/google/callback", get(google_connect_callback))
+        .route("/github/start", get(github_connect_start))
+        .route("/github/callback", get(github_connect_callback))
         .route("/microsoft/start", get(microsoft_connect_start))
         .route("/microsoft/callback", get(microsoft_connect_callback))
         .route("/slack/start", get(slack_connect_start))
@@ -801,6 +806,10 @@ async fn main() -> Result<()> {
         .route("/api/stripe/webhook", post(routes::stripe::webhook))
         // Public inbound webhook ingress (source-scoped)
         .route("/api/webhooks/{source_id}", post(webhook_ingress))
+        .route(
+            "/api/webhooks/github/{subscription_id}",
+            post(github_webhook_ingress),
+        )
         .nest("/api/auth", auth_routes) // <-- your auth routes with CSRF selectively applied
         .nest("/api/account", account_routes)
         .nest("/api/workflows", workflow_routes)

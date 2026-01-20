@@ -24,6 +24,7 @@
 - Removed legacy webhook action normalization/aliases from the canvas so obsolete webhook action nodes are no longer recognized in the editor.
 - Manifest action inputs now render number/boolean/string[]/object fields with typed parsing, JSON validation, and min/max-aware numeric controls.
 - Raindrop action now stores `_body` as a structured object to avoid HTTP JSON double-encoding for bookmark requests.
+- GitHub action nodes now share a single operation-driven manifest with canvas-side parameter mapping and operation-specific field visibility.
 
 ## Notes
 - Pickers are locally stateful and wrapped in useMemo/useCallback with click-outside + Escape handling to avoid React Flow re-render loops.

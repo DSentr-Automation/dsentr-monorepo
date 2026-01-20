@@ -287,5 +287,5 @@ OAuth connections grouping (Google Sheets, Microsoft Teams):
  - Slack action tests updated to expect the new `postAsUser` flag in emitted payloads so webhook/OAuth selection behavior remains validated.
 - Slack channel fetch helper now requires explicit workspace connection IDs only and maps auth-expired responses to a reconnect prompt so SlackAction stays aligned with backend token refresh behavior.
 - Slack action channel refreshes now trigger only on workspace connection changes so personal identity updates do not refetch channels.
-
+- OAuth provider typing and integration icon registry now include GitHub, and tests assert the GitHub icon lookup so Settings > Integrations can render GitHub manifests.
 

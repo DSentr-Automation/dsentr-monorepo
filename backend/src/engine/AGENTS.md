@@ -42,3 +42,6 @@
 - Engine startup now loads JSON action manifests and maps them to existing executors so custom action nodes resolve during registry construction.
 - Executor now merges node inputs into templating params (with params overriding), and tests cover manifest HTTP templates resolving POST methods from inputs.
 - Executor now sanitizes snapshot egress allowlists and logs rejected entries during collection.
+- Executor test configs now include GitHub OAuth settings so Config stubs match the expanded provider list.
+- Executor test configs now include GitHub App settings so GitHub App invariants remain wired in engine fixtures.
+- Added HTTP executor tests for GitHub action manifests to cover bearer auth headers and 204 workflow dispatch responses.

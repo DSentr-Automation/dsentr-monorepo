@@ -34,3 +34,5 @@
 - Worker startup now builds the action registry internally so the public worker entrypoint no longer exposes registry types.
 - Worker test AppState fixtures now seed the integration registry to keep shared state wiring consistent.
 - Scheduled run snapshots now normalize egress allowlists to vetted host entries before enqueueing.
+- Worker test configs now include GitHub OAuth settings so Config fixtures match the expanded provider list.
+- Worker test configs now include GitHub App settings so fixtures exercise GitHub App startup invariants.

@@ -74,13 +74,15 @@ use super::{
         refresh_connection, revoke_connection, ConnectionTarget, ListConnectionsQuery,
     },
     connect::{
-        google_connect_start, notion_connect_callback, notion_connect_start,
-        slack_connect_callback, slack_connect_start, ConnectQuery,
+        github_connect_callback, github_connect_start, google_connect_start,
+        notion_connect_callback, notion_connect_start, slack_connect_callback, slack_connect_start,
+        ConnectQuery,
     },
     helpers::{
         build_slack_state, build_state_cookie, error_message_for_redirect, handle_callback,
-        oauth_provider_for_integration_id, CallbackQuery, GOOGLE_STATE_COOKIE, NOTION_STATE_COOKIE,
-        OAUTH_PLAN_RESTRICTION_MESSAGE, SLACK_STATE_COOKIE, SLACK_WORKSPACE_REQUIRED_MESSAGE,
+        oauth_provider_for_integration_id, CallbackQuery, GITHUB_AUTH_URL, GITHUB_STATE_COOKIE,
+        GOOGLE_STATE_COOKIE, NOTION_STATE_COOKIE, OAUTH_PLAN_RESTRICTION_MESSAGE,
+        SLACK_STATE_COOKIE, SLACK_WORKSPACE_REQUIRED_MESSAGE,
     },
     prelude::ConnectedOAuthProvider,
 };
@@ -95,6 +97,11 @@ fn stub_config() -> Arc<Config> {
                 client_id: "client".into(),
                 client_secret: "secret".into(),
                 redirect_uri: "http://localhost/google".into(),
+            },
+            github: OAuthProviderConfig {
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                redirect_uri: "http://localhost/github".into(),
             },
             microsoft: OAuthProviderConfig {
                 client_id: "client".into(),
@@ -128,6 +135,7 @@ fn stub_config() -> Arc<Config> {
             },
             token_encryption_key: vec![0u8; 32],
         },
+        github_app: crate::config::GitHubAppSettings::default(),
         api_secrets_encryption_key: vec![1u8; 32],
         stripe: StripeSettings {
             client_id: "stub".into(),
@@ -294,6 +302,7 @@ fn build_list_connections_state(
         encryption_key,
         oauth_client,
         &config.oauth,
+        &config.github_app,
     ));
 
     let mut state = stub_state_with_workspace_repo(config, workspace_repo);
@@ -406,6 +415,64 @@ const NOTION_TOKEN_RESPONSE: &str = r#"{
 const NOTION_TOKEN_RESPONSE_MINIMAL: &str = r#"{
     "access_token": "notion-access"
 }"#;
+
+async fn spawn_github_stub_server() -> (std::net::SocketAddr, JoinHandle<()>) {
+    async fn github_token() -> Response<Body> {
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{
+                    "access_token": "ghu-user-token",
+                    "refresh_token": "ghu-refresh-token",
+                    "expires_in": 3600
+                }"#,
+            ))
+            .unwrap()
+    }
+
+    async fn github_user() -> Response<Body> {
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{
+                    "login": "octocat",
+                    "id": 101010,
+                    "email": "octocat@example.com"
+                }"#,
+            ))
+            .unwrap()
+    }
+
+    async fn github_emails() -> Response<Body> {
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"[
+                    { "email": "octocat@example.com", "primary": true, "verified": true }
+                ]"#,
+            ))
+            .unwrap()
+    }
+
+    let app = Router::new()
+        .route("/login/oauth/access_token", post(github_token))
+        .route("/user", get(github_user))
+        .route("/user/emails", get(github_emails));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = axum::serve(listener, app.into_make_service());
+    let handle = tokio::spawn(async move {
+        if let Err(err) = server.await {
+            eprintln!("stub server exited with error: {err}");
+        }
+    });
+
+    (addr, handle)
+}
 
 async fn spawn_slack_stub_server() -> (std::net::SocketAddr, JoinHandle<()>) {
     async fn slack_oauth_access() -> Response<Body> {
@@ -1298,6 +1365,7 @@ async fn list_connections_returns_personal_and_workspace_entries() {
         encryption_key,
         oauth_client,
         &config.oauth,
+        &config.github_app,
     ));
 
     // Ensure user is a member of the requested workspace
@@ -1564,6 +1632,7 @@ async fn list_connections_requires_membership() {
         encryption_key,
         oauth_client,
         &config.oauth,
+        &config.github_app,
     ));
 
     // No membership for this workspace
@@ -1919,6 +1988,7 @@ async fn list_connections_includes_workspace_reconnect_flag() {
         encryption_key,
         oauth_client,
         &config.oauth,
+        &config.github_app,
     ));
 
     // Ensure membership for the requested workspace
@@ -2158,6 +2228,7 @@ async fn get_connection_by_id_returns_personal_connection() {
         Arc::new(config.oauth.token_encryption_key.clone()),
         Arc::new(reqwest::Client::new()),
         &config.oauth,
+        &config.github_app,
     ));
 
     let mut state = stub_state(config);
@@ -2237,6 +2308,7 @@ async fn refresh_connection_missing_connection_id_has_no_side_effects() {
         Arc::new(config.oauth.token_encryption_key.clone()),
         Arc::new(reqwest::Client::new()),
         &config.oauth,
+        &config.github_app,
     ));
 
     let mut state = stub_state(config);
@@ -2296,6 +2368,7 @@ async fn refresh_connection_missing_connection_id_does_not_fallback_to_provider(
         Arc::new(config.oauth.token_encryption_key.clone()),
         Arc::new(reqwest::Client::new()),
         &config.oauth,
+        &config.github_app,
     ));
 
     let mut state = stub_state(config);
@@ -2351,6 +2424,7 @@ async fn refresh_connection_accepts_connection_id_query() {
         Arc::new(config.oauth.token_encryption_key.clone()),
         Arc::new(reqwest::Client::new()),
         &config.oauth,
+        &config.github_app,
     ));
 
     let mut state = stub_state(config);
@@ -2416,6 +2490,7 @@ async fn disconnect_connection_accepts_connection_id_body() {
         Arc::new(config.oauth.token_encryption_key.clone()),
         Arc::new(reqwest::Client::new()),
         &config.oauth,
+        &config.github_app,
     ));
 
     let mut state = stub_state(config);
@@ -2470,6 +2545,7 @@ async fn disconnect_connection_missing_connection_id_has_no_side_effects() {
         Arc::new(config.oauth.token_encryption_key.clone()),
         Arc::new(reqwest::Client::new()),
         &config.oauth,
+        &config.github_app,
     ));
 
     let mut state = stub_state(config);
@@ -2529,6 +2605,7 @@ async fn disconnect_connection_missing_connection_id_does_not_fallback_to_provid
         Arc::new(config.oauth.token_encryption_key.clone()),
         Arc::new(reqwest::Client::new()),
         &config.oauth,
+        &config.github_app,
     ));
 
     let mut state = stub_state(config);
@@ -2584,6 +2661,7 @@ async fn revoke_connection_accepts_connection_id_query() {
         Arc::new(config.oauth.token_encryption_key.clone()),
         Arc::new(reqwest::Client::new()),
         &config.oauth,
+        &config.github_app,
     ));
 
     let mut state = stub_state(config);
@@ -3064,6 +3142,60 @@ async fn workspace_plan_google_start_sets_state_cookie() {
 }
 
 #[tokio::test]
+async fn workspace_plan_github_start_sets_state_cookie() {
+    let config = stub_config();
+    let state = stub_state(config.clone());
+    let expected_scope = state.oauth_accounts.github_scopes().to_string();
+    let claims = Claims {
+        plan: Some("workspace".into()),
+        ..stub_claims()
+    };
+
+    let response = github_connect_start(
+        State(state),
+        AuthSession(claims),
+        Query(ConnectQuery::default()),
+        CookieJar::new(),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let cookies = response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .map(|value| value.to_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(cookies
+        .iter()
+        .any(|cookie| cookie.contains(GITHUB_STATE_COOKIE)));
+
+    let location = response
+        .headers()
+        .get(header::LOCATION)
+        .expect("location header present")
+        .to_str()
+        .unwrap();
+    let url = Url::parse(location).expect("github redirect url");
+    assert!(url.as_str().starts_with(GITHUB_AUTH_URL));
+    let params: HashMap<String, String> = url.query_pairs().into_owned().collect();
+    assert_eq!(params.get("client_id").map(String::as_str), Some("client"));
+    assert_eq!(
+        params.get("redirect_uri").map(String::as_str),
+        Some("http://localhost/github")
+    );
+    assert_eq!(
+        params.get("response_type").map(String::as_str),
+        Some("code")
+    );
+    assert_eq!(
+        params.get("scope").map(String::as_str),
+        Some(expected_scope.as_str())
+    );
+    assert!(params.contains_key("state"));
+}
+
+#[tokio::test]
 async fn slack_start_without_workspace_redirects_with_workspace_required_message() {
     let config = stub_config();
     let state = stub_state(config.clone());
@@ -3275,6 +3407,79 @@ async fn workspace_plan_notion_start_with_workspace_scope_encodes_state() {
 }
 
 #[tokio::test]
+async fn github_callback_saves_personal_token() {
+    let config = stub_config();
+    let user_id = Uuid::new_v4();
+
+    let (addr, _handle) = spawn_github_stub_server().await;
+
+    let token_repo = Arc::new(RecordingTokenRepo::default());
+    let workspace_connections = Arc::new(RecordingWorkspaceConnectionRepo::default());
+    let encryption_key = Arc::new(config.oauth.token_encryption_key.clone());
+
+    let mut oauth_service = OAuthAccountService::new(
+        token_repo.clone(),
+        workspace_connections.clone(),
+        encryption_key.clone(),
+        Arc::new(reqwest::Client::new()),
+        &config.oauth,
+        &config.github_app,
+    );
+    oauth_service.set_github_endpoint_overrides(
+        format!("http://{}/login/oauth/access_token", addr),
+        format!("http://{}/user", addr),
+        format!("http://{}/user/emails", addr),
+    );
+    let oauth_service = Arc::new(oauth_service);
+
+    let mut state = stub_state(config.clone());
+    state.oauth_accounts = oauth_service;
+
+    let claims = Claims {
+        id: user_id.to_string(),
+        plan: Some("workspace".into()),
+        ..stub_claims()
+    };
+
+    let state_token = "github-state-token";
+    let jar = CookieJar::new().add(build_state_cookie(GITHUB_STATE_COOKIE, state_token));
+    let response = github_connect_callback(
+        State(state),
+        AuthSession(claims),
+        jar,
+        Query(CallbackQuery {
+            code: Some("auth-code".into()),
+            state: Some(state_token.to_string()),
+            error: None,
+            error_description: None,
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let location = response
+        .headers()
+        .get(header::LOCATION)
+        .expect("location header present")
+        .to_str()
+        .unwrap();
+    assert!(location.contains("connected=true"));
+    assert!(location.contains("provider=github"));
+
+    let saved = token_repo.saved_token().expect("token saved");
+    assert_eq!(saved.provider, ConnectedOAuthProvider::GitHub);
+    assert_eq!(saved.user_id, user_id);
+    assert_eq!(saved.workspace_id, None);
+    assert_eq!(saved.account_email, "octocat");
+
+    let connections = workspace_connections.connections();
+    assert!(
+        connections.is_empty(),
+        "OAuth callback must not auto-promote to workspace"
+    );
+}
+
+#[tokio::test]
 async fn notion_callback_saves_personal_token() {
     let config = stub_config();
     let user_id = Uuid::new_v4();
@@ -3291,6 +3496,7 @@ async fn notion_callback_saves_personal_token() {
         encryption_key.clone(),
         Arc::new(reqwest::Client::new()),
         &config.oauth,
+        &config.github_app,
     );
     oauth_service.set_notion_endpoint_override(format!("http://{}/oauth/token", addr));
     let oauth_service = Arc::new(oauth_service);
@@ -3362,6 +3568,7 @@ async fn notion_callback_handles_missing_fields() {
         encryption_key.clone(),
         Arc::new(reqwest::Client::new()),
         &config.oauth,
+        &config.github_app,
     );
     oauth_service.set_notion_endpoint_override(format!("http://{}/oauth/token", addr));
     let oauth_service = Arc::new(oauth_service);
@@ -3419,6 +3626,7 @@ async fn notion_callback_creates_personal_token_only() {
         encryption_key.clone(),
         Arc::new(reqwest::Client::new()),
         &config.oauth,
+        &config.github_app,
     );
     oauth_service.set_notion_endpoint_override(format!("http://{}/oauth/token", addr));
     let oauth_service = Arc::new(oauth_service);
@@ -3508,6 +3716,7 @@ async fn slack_callback_persists_team_id_from_auth_test() {
         encryption_key.clone(),
         Arc::new(reqwest::Client::new()),
         &config.oauth,
+        &config.github_app,
     );
     oauth_service.set_slack_endpoint_overrides(
         format!("http://{}/api/oauth.v2.access", addr),
