@@ -21,12 +21,12 @@
       "label": "Operation",
       "type": "enum",
       "options": [
-        "create_issue",
-        "create_issue_comment",
-        "add_labels_to_issue",
-        "create_pull_request",
-        "create_release",
-        "dispatch_workflow"
+        { "value": "create_issue", "label": "Create issue" },
+        { "value": "create_issue_comment", "label": "Create issue comment" },
+        { "value": "add_labels_to_issue", "label": "Add labels to issue" },
+        { "value": "create_pull_request", "label": "Create pull request" },
+        { "value": "create_release", "label": "Create release" },
+        { "value": "dispatch_workflow", "label": "Dispatch workflow" }
       ],
       "required": true
     },
