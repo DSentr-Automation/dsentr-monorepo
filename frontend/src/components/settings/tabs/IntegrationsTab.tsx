@@ -975,7 +975,7 @@ export default function IntegrationsTab({
                           return (
                             <Icon
                               aria-hidden="true"
-                              className="h-7 w-7"
+                              className="h-7 w-7 text-zinc-700 dark:text-zinc-200"
                               focusable="false"
                             />
                           )
