@@ -57,9 +57,14 @@ export type ActionInputDefinition = {
   required: boolean
   provider?: string
   connectionScopes?: string[]
-  options?: string[]
+  options?: ActionInputOption[]
   min?: number
   max?: number
+}
+
+export type ActionInputOption = {
+  value: string
+  label: string
 }
 
 export type ActionDefinition = {
@@ -163,6 +168,34 @@ const pickManifestGradient = (seed: string) => {
   return MANIFEST_ACTION_GRADIENTS[idx]
 }
 
+const normalizeEnumOptions = (
+  options: unknown
+): ActionInputOption[] | undefined => {
+  if (!Array.isArray(options)) return undefined
+  const normalized = options.reduce<ActionInputOption[]>((acc, option) => {
+    if (typeof option === 'string') {
+      const trimmed = option.trim()
+      if (trimmed) {
+        acc.push({ value: trimmed, label: trimmed })
+      }
+      return acc
+    }
+    if (!option || typeof option !== 'object') return acc
+    const value =
+      typeof (option as any).value === 'string'
+        ? (option as any).value.trim()
+        : ''
+    const label =
+      typeof (option as any).label === 'string'
+        ? (option as any).label.trim()
+        : ''
+    if (!value) return acc
+    acc.push({ value, label: label || value })
+    return acc
+  }, [])
+  return normalized.length > 0 ? normalized : undefined
+}
+
 const normalizeInputs = (value: ActionCatalogEntry['inputs']) => {
   if (!Array.isArray(value)) return []
   return value.reduce<ActionInputDefinition[]>((acc, input) => {
@@ -209,10 +242,9 @@ const normalizeInputs = (value: ActionCatalogEntry['inputs']) => {
     }
 
     // Preserve enum options if present
-    if (Array.isArray((input as any).options)) {
-      normalizedInput.options = (input as any).options.filter(
-        (option: any) => typeof option === 'string' && option.trim().length > 0
-      )
+    const normalizedOptions = normalizeEnumOptions((input as any).options)
+    if (normalizedOptions) {
+      normalizedInput.options = normalizedOptions
     }
 
     if (
@@ -245,7 +277,7 @@ const buildEmptyParams = (inputs: ActionInputDefinition[]) => {
         params.connectionId = null
         break
       case 'enum':
-        params[input.name] = input.options?.[0] ?? ''
+        params[input.name] = input.options?.[0]?.value ?? ''
         break
       case 'number':
         params[input.name] = null

@@ -1815,9 +1815,9 @@ function FlyoutActionFields({
     const operationInput = allInputs.find(
       (input) => input.name === 'operation' && input.type === 'enum'
     )
-    if (operationInput?.options?.[0]) {
+    if (operationInput?.options?.[0]?.value) {
       controller.updateParams(
-        { operation: operationInput.options[0] },
+        { operation: operationInput.options[0].value },
         { markDirty: false }
       )
     }
@@ -1840,9 +1840,9 @@ function FlyoutActionFields({
     const operationInput = allInputs.find(
       (input) => input.name === 'operation' && input.type === 'enum'
     )
-    if (operationInput?.options?.[0]) {
+    if (operationInput?.options?.[0]?.value) {
       controller.updateParams(
-        { operation: operationInput.options[0] },
+        { operation: operationInput.options[0].value },
         { markDirty: false }
       )
     }
@@ -1913,14 +1913,15 @@ function FlyoutActionFields({
           if (input.type === 'enum' && input.options) {
             const rawValue = controller.params?.[input.name]
             const formatted = formatManifestInputValue('enum', rawValue)
+            const defaultValue = input.options[0]?.value ?? ''
             const value =
               typeof formatted === 'string' && formatted.trim().length > 0
                 ? formatted
-                : input.options[0] || ''
+                : defaultValue
 
             const dropdownOptions = input.options.map((option) => ({
-              label: option,
-              value: option
+              label: option.label,
+              value: option.value
             }))
 
             return (

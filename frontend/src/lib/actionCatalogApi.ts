@@ -7,6 +7,7 @@ export type ActionCatalogInput = {
   required?: boolean | null
   provider?: string | null
   connectionScopes?: string[] | null
+  options?: Array<{ value: string; label: string }> | string[] | null
 }
 
 export type ActionCatalogEntry = {

@@ -277,6 +277,8 @@ OAuth connections grouping (Google Sheets, Microsoft Teams):
 - Updated validation to check the selected `scope/id` within the appropriate group and surface errors when the selection is missing or stale per group, without intermediate flattening logic.
 - Adjusted related unit tests to assert grouped behavior and guard against regressions.
 
+- Action catalog parsing now normalizes legacy string enum options into value/label pairs, and the enum dropdown UI displays labels while storing values with test coverage for labeled options.
+
 - Added workspace-only run usage bar in the dashboard header and a new Settings ? Usage tab to show workspace totals, member run breakdowns, and overage indicators so over-limit runs remain visible for billing.
 - Added a support entry point in the dashboard header plus an issue-report modal that submits user/workspace context to the backend for troubleshooting.
 - Added a header message badge and inbox modal so customers can read/reply to system messages and clear unread counts synced with backend read tracking.
@@ -288,4 +290,3 @@ OAuth connections grouping (Google Sheets, Microsoft Teams):
 - Slack channel fetch helper now requires explicit workspace connection IDs only and maps auth-expired responses to a reconnect prompt so SlackAction stays aligned with backend token refresh behavior.
 - Slack action channel refreshes now trigger only on workspace connection changes so personal identity updates do not refetch channels.
 - OAuth provider typing and integration icon registry now include GitHub, and tests assert the GitHub icon lookup so Settings > Integrations can render GitHub manifests.
-
