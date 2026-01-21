@@ -47,9 +47,54 @@ pub(crate) struct ActionInput {
     pub provider: Option<String>,
     #[serde(rename = "connection_scopes")]
     pub connection_scopes: Option<Vec<String>>,
-    pub options: Option<Vec<String>>,
+    pub options: Option<EnumOptions>,
     pub min: Option<f64>,
     pub max: Option<f64>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EnumOption {
+    pub value: String,
+    pub label: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(untagged)]
+pub(crate) enum EnumOptions {
+    Values(Vec<String>),
+    Labeled(Vec<EnumOption>),
+}
+
+impl EnumOptions {
+    fn normalize(self) -> EnumOptions {
+        match self {
+            EnumOptions::Values(values) => EnumOptions::Labeled(
+                values
+                    .into_iter()
+                    .map(|value| EnumOption {
+                        label: value.clone(),
+                        value,
+                    })
+                    .collect(),
+            ),
+            EnumOptions::Labeled(options) => EnumOptions::Labeled(options),
+        }
+    }
+
+    fn values(&self) -> Vec<&str> {
+        match self {
+            EnumOptions::Values(values) => values.iter().map(String::as_str).collect(),
+            EnumOptions::Labeled(options) => options.iter().map(|opt| opt.value.as_str()).collect(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        match self {
+            EnumOptions::Values(values) => values.is_empty(),
+            EnumOptions::Labeled(options) => options.is_empty(),
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -136,6 +181,14 @@ pub(crate) fn action_manifest_registry() -> &'static ActionManifestRegistry {
     })
 }
 
+fn normalize_enum_inputs(inputs: &mut [ActionInput]) {
+    for input in inputs {
+        if let Some(options) = input.options.take() {
+            input.options = Some(options.normalize());
+        }
+    }
+}
+
 fn load_action_manifest_registry() -> Result<ActionManifestRegistry, String> {
     let mut entries = Vec::new();
     let mut http_manifests: std::collections::HashMap<String, HttpManifest> =
@@ -152,8 +205,10 @@ fn load_action_manifest_registry() -> Result<ActionManifestRegistry, String> {
             ));
         }
 
-        let manifest: ActionManifestSpec = serde_json::from_slice(file.contents())
+        let mut manifest: ActionManifestSpec = serde_json::from_slice(file.contents())
             .map_err(|err| format!("{}: failed to parse manifest: {err}", file.path().display()))?;
+
+        normalize_enum_inputs(&mut manifest.inputs);
 
         validate_manifest(&manifest)
             .map_err(|err| format!("{}: invalid manifest: {err}", file.path().display()))?;
@@ -208,8 +263,10 @@ pub(crate) fn load_action_manifest_aliases() -> Result<Vec<ActionAlias>, String>
             ));
         }
 
-        let manifest: ActionManifestSpec = serde_json::from_slice(file.contents())
+        let mut manifest: ActionManifestSpec = serde_json::from_slice(file.contents())
             .map_err(|err| format!("{}: failed to parse manifest: {err}", file.path().display()))?;
+
+        normalize_enum_inputs(&mut manifest.inputs);
 
         validate_manifest(&manifest)
             .map_err(|err| format!("{}: invalid manifest: {err}", file.path().display()))?;
@@ -313,10 +370,27 @@ fn validate_inputs(inputs: &[ActionInput]) -> Result<(), String> {
             let options = input
                 .options
                 .as_ref()
-                .filter(|values| !values.is_empty())
                 .ok_or_else(|| format!("inputs.{}.options is required for enum type", name))?;
-            if options.iter().any(|value| value.trim().is_empty()) {
-                return Err(format!("inputs.{}.options entries cannot be empty", name));
+            if options.is_empty() {
+                return Err(format!("inputs.{}.options is required for enum type", name));
+            }
+            let values = options.values();
+            if let Some(invalid) = values.iter().find(|value| value.trim().is_empty()) {
+                return Err(format!(
+                    "inputs.{}.options has invalid value `{}`",
+                    name,
+                    format_enum_value(invalid)
+                ));
+            }
+            if let EnumOptions::Labeled(labeled) = options {
+                if let Some(invalid) = labeled.iter().find(|option| option.label.trim().is_empty())
+                {
+                    return Err(format!(
+                        "inputs.{}.options has empty label for value `{}`",
+                        name,
+                        format_enum_value(&invalid.value)
+                    ));
+                }
             }
         } else if input.options.is_some() {
             return Err(format!(
@@ -393,6 +467,15 @@ fn validate_kv_list(label: &str, list: &[KeyValuePair]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn format_enum_value(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        "<empty>".to_string()
+    } else {
+        value.to_string()
+    }
 }
 
 fn validate_egress(egress: &Option<EgressManifest>) -> Result<(), String> {
@@ -656,6 +739,71 @@ mod tests {
     }
 
     #[test]
+    fn validate_enum_accepts_string_options() {
+        let manifest = manifest_with_input(json!({
+            "name": "choice",
+            "label": "Choice",
+            "type": "enum",
+            "required": true,
+            "options": ["first", "second"]
+        }));
+
+        let result = validate_manifest(&manifest);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_enum_accepts_labeled_options() {
+        let manifest = manifest_with_input(json!({
+            "name": "choice",
+            "label": "Choice",
+            "type": "enum",
+            "required": true,
+            "options": [
+                { "value": "first", "label": "First" },
+                { "value": "second", "label": "Second" }
+            ]
+        }));
+
+        let result = validate_manifest(&manifest);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_enum_rejects_empty_option_value() {
+        let manifest = manifest_with_input(json!({
+            "name": "choice",
+            "label": "Choice",
+            "type": "enum",
+            "required": true,
+            "options": [
+                { "value": " ", "label": "Blank" }
+            ]
+        }));
+
+        let err = validate_manifest(&manifest).expect_err("enum should reject empty values");
+        assert!(err.contains("inputs.choice.options"));
+        assert!(err.contains("invalid value"));
+    }
+
+    #[test]
+    fn validate_enum_rejects_empty_option_label() {
+        let manifest = manifest_with_input(json!({
+            "name": "choice",
+            "label": "Choice",
+            "type": "enum",
+            "required": true,
+            "options": [
+                { "value": "first", "label": " " }
+            ]
+        }));
+
+        let err = validate_manifest(&manifest).expect_err("enum should reject empty labels");
+        assert!(err.contains("inputs.choice.options"));
+        assert!(err.contains("empty label"));
+    }
+
+    #[test]
     fn validate_number_min_max_order() {
         let manifest = manifest_with_input(json!({
             "name": "count",
@@ -716,6 +864,7 @@ mod tests {
             .find(|input| input.name == "operation")
             .and_then(|input| input.options.as_ref())
             .expect("github.action should define operation options");
+        let operation_values = operation_input.values();
 
         let expected = [
             "create_issue",
@@ -731,7 +880,7 @@ mod tests {
         // is required in the manifest.
         for option in expected {
             assert!(
-                operation_input.iter().any(|value| value == option),
+                operation_values.contains(&option),
                 "missing GitHub operation option: {option}"
             );
         }

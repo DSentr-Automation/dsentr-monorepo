@@ -66,3 +66,4 @@
 - Added a GitHub action hydrator to translate operation params into sanitized HTTP method, URL, and body payloads for execution.
 - Refined the GitHub hydrator to return per-operation HTTP methods and tightened validation/field preservation notes.
 - HTTP executor now prioritizes _method/_url/_body overrides and manifest defaults, preventing raw params.body collisions for manifest-based actions.
+- Action manifest enum inputs now accept labeled value/label options and normalize enum validation to operate on option values only.

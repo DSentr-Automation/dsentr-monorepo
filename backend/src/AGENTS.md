@@ -67,3 +67,4 @@
 - Config now tracks whether GitHub App user OAuth is enabled and startup validation fails fast when GitHub App user OAuth is disabled while the GitHub integration is active.
 - Collapsed GitHub HTTP actions into a single operation-based manifest so GitHub issue, pull request, release, label, and workflow dispatch actions share one catalog entry.
 - Main router now mounts GitHub App webhook ingress for `/api/webhooks/github/:subscription_id`, reusing the webhook pipeline after signature validation and header-derived event typing.
+- GitHub action manifest operations now include labeled enum options so the catalog can surface UI-friendly labels without changing execution behavior.
