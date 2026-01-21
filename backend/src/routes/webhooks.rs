@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::future::Future;
+use std::sync::Arc;
 use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
 use tracing::{error, info, warn, Span};
@@ -21,6 +22,7 @@ use crate::db::postgres_webhook_delivery_repository::PostgresWebhookDeliveryRepo
 use crate::db::postgres_webhook_ingress_dedupe_repository::PostgresWebhookIngressDedupeRepository;
 use crate::db::postgres_webhook_source_repository::PostgresWebhookSourceRepository;
 use crate::db::postgres_webhook_subscription_repository::PostgresWebhookSubscriptionRepository;
+use crate::db::postgres_provider_trigger_repository::PostgresProviderTriggerRepository;
 use crate::db::webhook_delivery_repository::WebhookDeliveryRepository;
 use crate::db::webhook_ingress_dedupe_repository::{
     WebhookIngressDedupeKey, WebhookIngressDedupeRepository,
@@ -29,6 +31,12 @@ use crate::db::webhook_source_repository::WebhookSourceRepository;
 use crate::db::webhook_subscription_repository::WebhookSubscriptionRepository;
 use crate::db::workflow_repository::WorkflowRepository;
 use crate::db::workspace_repository::WorkspaceRepository;
+use crate::routes::github_provider_trigger_resolver::GitHubProviderTriggerResolver;
+use crate::routes::github_provider_trigger_handoff::build_handoff;
+use crate::routes::github_provider_trigger_execution_context::resolve_execution_contexts;
+use crate::routes::github_provider_trigger_dispatcher::build_dispatch_list;
+use crate::routes::github_provider_trigger_planner::build_execution_plan;
+use crate::routes::github_provider_trigger_engine_bridge::ProviderTriggerEngineBridge;
 use crate::models::webhook_source::WebhookSource;
 use crate::models::workspace::{WorkspaceMembershipSummary, WorkspaceRole};
 use crate::responses::JsonResponse;
@@ -45,6 +53,7 @@ const EVENT_TYPE_FIELD: &str = "event_type";
 const SIGNATURE_PREFIX: &str = "v1=";
 const GITHUB_EVENT_HEADER: &str = "X-GitHub-Event";
 const GITHUB_SIGNATURE_HEADER: &str = "X-Hub-Signature-256";
+const GITHUB_DELIVERY_HEADER: &str = "X-GitHub-Delivery";
 const GITHUB_SIGNATURE_PREFIX: &str = "sha256=";
 const HASH_PREFIX_LEN: usize = 12;
 const METRIC_INGRESS_DEDUPE_HIT: &str = "ingress_dedupe_hit";
@@ -1707,6 +1716,16 @@ async fn handle_github_webhook_ingress(
         }
     };
 
+    // Extract GitHub delivery ID for idempotency (optional)
+    let github_delivery = header_value(headers, GITHUB_DELIVERY_HEADER)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    // Log if missing - no hard failure, just skip idempotency
+    if github_delivery.is_none() {
+        tracing::warn!("Missing X-GitHub-Delivery header, skipping idempotency");
+    }
+
     let source = match source_repo
         .find_webhook_source_by_id(subscription_context.webhook_source_id)
         .await
@@ -1831,6 +1850,59 @@ async fn handle_github_webhook_ingress(
         event_type = event_type.as_str(),
         "webhook event accepted"
     );
+
+    // Extract GitHub routing keys from payload
+    let installation_id = payload
+        .get("installation")
+        .and_then(|inst| inst.get("id"))
+        .and_then(|id| id.as_u64())
+        .map(|id| id.to_string());
+
+    let repository_id = payload
+        .get("repository")
+        .and_then(|repo| repo.get("id"))
+        .and_then(|id| id.as_u64())
+        .map(|id| id.to_string());
+
+    // Resolve provider triggers and log results
+    let resolver = GitHubProviderTriggerResolver::new(
+        Arc::new(PostgresProviderTriggerRepository { pool: (*app_state.db_pool).clone() })
+    );
+
+    match resolver.resolve_triggers(&event_type, installation_id.as_deref(), repository_id.as_deref()).await {
+        Ok(matches) => {
+            let _handoff = build_handoff(build_dispatch_list(build_execution_plan(matches.clone())), github_delivery);
+            let _contexts = match resolve_execution_contexts(_handoff.clone(), app_state.workflow_repo.as_ref()).await {
+                Ok(contexts) => contexts,
+                Err(err) => {
+                    error!(?err, "failed to resolve execution contexts");
+                    return JsonResponse::server_error("Failed to resolve execution contexts").into_response();
+                }
+            };
+            let bridge = ProviderTriggerEngineBridge::new();
+            let executor = crate::engine::provider_trigger_executor::GitHubProviderTriggerExecutor::new(app_state.clone());
+            bridge.execute(&executor, _contexts).await;
+            info!(
+                source_id = %source.id,
+                %event_type,
+                installation_id = ?installation_id,
+                repository_id = ?repository_id,
+                installation_matches = matches.installation_matches.len(),
+                repository_matches = matches.repository_matches.len(),
+                "provider trigger resolution completed"
+            );
+        }
+        Err(err) => {
+            error!(
+                source_id = %source.id,
+                %event_type,
+                installation_id = ?installation_id,
+                repository_id = ?repository_id,
+                ?err,
+                "provider trigger resolution failed"
+            );
+        }
+    }
 
     dispatch_webhook_event(
         app_state,

@@ -2,6 +2,8 @@ pub mod mock_db;
 pub mod mock_stripe_event_log_repository;
 pub mod oauth_token_repository;
 pub mod postgres_oauth_token_repository;
+pub mod postgres_provider_trigger_repository;
+pub mod provider_trigger_repository;
 pub mod postgres_stripe_event_log_repository;
 pub mod postgres_user_repository;
 pub mod postgres_webhook_delivery_repository;

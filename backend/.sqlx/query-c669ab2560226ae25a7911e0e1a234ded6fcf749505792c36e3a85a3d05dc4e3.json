@@ -1,0 +1,92 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT \n                id, workspace_id, provider as \"provider: ProviderTriggerProvider\", workflow_id, trigger_node_id,\n                event_type, installation_id, repository_id, enabled,\n                created_at, updated_at\n            FROM provider_triggers\n            WHERE workflow_id = $2\n            AND ($1::uuid IS NULL OR workspace_id = $1)\n            ORDER BY created_at DESC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "workspace_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "provider: ProviderTriggerProvider",
+        "type_info": {
+          "Custom": {
+            "name": "provider_trigger_provider",
+            "kind": {
+              "Enum": [
+                "github"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "workflow_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "trigger_node_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "event_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "installation_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "repository_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "enabled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 10,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c669ab2560226ae25a7911e0e1a234ded6fcf749505792c36e3a85a3d05dc4e3"
+}

@@ -45,7 +45,10 @@
                 "microsoft",
                 "slack",
                 "asana",
-                "notion"
+                "notion",
+                "bitly",
+                "raindrop",
+                "github"
               ]
             }
           }
@@ -114,7 +117,10 @@
                 "microsoft",
                 "slack",
                 "asana",
-                "notion"
+                "notion",
+                "bitly",
+                "raindrop",
+                "github"
               ]
             }
           }
