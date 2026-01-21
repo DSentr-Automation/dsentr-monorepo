@@ -2,6 +2,7 @@ pub mod actions;
 mod executor;
 pub(crate) mod graph;
 pub(crate) mod nodes;
+pub mod provider_trigger_executor;
 mod templating;
 
 pub(crate) use actions::registry::ActionRegistry;

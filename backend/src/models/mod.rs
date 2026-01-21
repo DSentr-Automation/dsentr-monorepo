@@ -5,6 +5,7 @@ pub mod issue_report;
 pub mod login_activity;
 pub mod oauth_token;
 pub mod plan;
+pub mod provider_trigger;
 pub mod signup;
 pub mod user;
 pub mod webhook_source;
