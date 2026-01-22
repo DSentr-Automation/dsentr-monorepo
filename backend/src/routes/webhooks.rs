@@ -1444,7 +1444,7 @@ pub async fn github_webhook_ingress_static(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let source_id = match app_state.config.github_webhook_source_id {
+    let webhook_source_identifier = match app_state.config.github_webhook_source_id.clone() {
         Some(id) => id,
         None => {
             error!("GITHUB_WEBHOOK_SOURCE_ID not configured");
@@ -1453,11 +1453,47 @@ pub async fn github_webhook_ingress_static(
         }
     };
 
-    // Log the resolved webhook source ID for future debugging
+    // Log the resolved webhook source identifier for future debugging
     info!(
-        %source_id,
-        "static GitHub App webhook handler using webhook source"
+        webhook_source_identifier = %webhook_source_identifier,
+        "static GitHub App webhook handler using webhook source identifier"
     );
+
+    let source_repo = PostgresWebhookSourceRepository {
+        pool: (*app_state.db_pool).clone(),
+        encryption_key: app_state.config.api_secrets_encryption_key.clone(),
+    };
+
+    // Look up webhook source by name (opaque string identifier)
+    let webhook_source = match source_repo
+        .find_webhook_source_by_name(&webhook_source_identifier)
+        .await
+    {
+        Ok(Some(source)) => source,
+        Ok(None) => {
+            error!(
+                webhook_source_identifier = %webhook_source_identifier,
+                "GitHub webhook source not found in database"
+            );
+            return JsonResponse::server_error("GitHub webhook source not found").into_response();
+        }
+        Err(err) => {
+            error!(
+                ?err,
+                webhook_source_identifier = %webhook_source_identifier,
+                "failed to resolve GitHub webhook source"
+            );
+            return JsonResponse::server_error("Failed to resolve GitHub webhook source")
+                .into_response();
+        }
+    };
+
+    // Create a minimal subscription context using the found webhook source
+    let subscription_context = SubscriptionContext {
+        _subscription_id: webhook_source.id, // Use the UUID of the found webhook source
+        webhook_source_id: webhook_source.id,
+        workspace_id: webhook_source.workspace_id,
+    };
 
     let dedupe_repo = PostgresWebhookIngressDedupeRepository {
         pool: (*app_state.db_pool).clone(),
@@ -1465,29 +1501,9 @@ pub async fn github_webhook_ingress_static(
     let delivery_repo = PostgresWebhookDeliveryRepository {
         pool: (*app_state.db_pool).clone(),
     };
-    let source_repo = PostgresWebhookSourceRepository {
-        pool: (*app_state.db_pool).clone(),
-        encryption_key: app_state.config.api_secrets_encryption_key.clone(),
-    };
     let subscription_repo = PostgresWebhookSubscriptionRepository {
         pool: (*app_state.db_pool).clone(),
     };
-
-    // Create a minimal subscription context for the static webhook source
-    let subscription_context =
-        match fetch_subscription_context(app_state.db_pool.as_ref(), source_id).await {
-            Ok(Some(context)) => context,
-            Ok(None) => {
-                error!(%source_id, "GitHub webhook source not found in database");
-                return JsonResponse::server_error("GitHub webhook source not found")
-                    .into_response();
-            }
-            Err(err) => {
-                error!(?err, %source_id, "failed to resolve GitHub webhook source");
-                return JsonResponse::server_error("Failed to resolve GitHub webhook source")
-                    .into_response();
-            }
-        };
 
     handle_github_webhook_ingress(
         &app_state,
@@ -2567,6 +2583,21 @@ mod tests {
             Ok(self.source.clone())
         }
 
+        async fn find_webhook_source_by_name(
+            &self,
+            name: &str,
+        ) -> Result<Option<WebhookSource>, sqlx::Error> {
+            if let Some(ref source) = self.source {
+                if source.name == name {
+                    Ok(Some(source.clone()))
+                } else {
+                    Ok(None)
+                }
+            } else {
+                Ok(None)
+            }
+        }
+
         async fn list_webhook_sources_by_workspace(
             &self,
             _workspace_id: Uuid,
@@ -2881,6 +2912,19 @@ mod tests {
                 .unwrap()
                 .iter()
                 .find(|source| source.id == source_id)
+                .cloned())
+        }
+
+        async fn find_webhook_source_by_name(
+            &self,
+            name: &str,
+        ) -> Result<Option<WebhookSource>, sqlx::Error> {
+            Ok(self
+                .sources
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|source| source.name == name)
                 .cloned())
         }
 

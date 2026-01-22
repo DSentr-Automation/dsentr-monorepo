@@ -77,6 +77,32 @@ impl WebhookSourceRepository for PostgresWebhookSourceRepository {
         .await
     }
 
+    async fn find_webhook_source_by_name(
+        &self,
+        name: &str,
+    ) -> Result<Option<WebhookSource>, sqlx::Error> {
+        sqlx::query_as!(
+            WebhookSource,
+            r#"
+            SELECT id,
+                   workspace_id,
+                   name,
+                   secret,
+                   require_hmac,
+                   replay_window_sec,
+                   last_seen_at,
+                   enabled,
+                   created_at,
+                   updated_at
+            FROM webhook_sources
+            WHERE name = $1
+            "#,
+            name
+        )
+        .fetch_optional(&self.pool)
+        .await
+    }
+
     async fn list_webhook_sources_by_workspace(
         &self,
         workspace_id: Uuid,

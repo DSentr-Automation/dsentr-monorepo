@@ -2,7 +2,6 @@ use std::env;
 
 use crate::utils::encryption::{decode_key, EncryptionError};
 use thiserror::Error;
-use uuid::Uuid;
 
 pub const DEFAULT_WORKSPACE_MEMBER_LIMIT: i64 = 8;
 pub const DEFAULT_WORKSPACE_MONTHLY_RUN_LIMIT: i64 = 20_000;
@@ -83,7 +82,7 @@ pub struct Config {
     pub admin_origin: String,
     pub oauth: OAuthSettings,
     pub github_app: GitHubAppSettings,
-    pub github_webhook_source_id: Option<Uuid>,
+    pub github_webhook_source_id: Option<String>,
     pub api_secrets_encryption_key: Vec<u8>,
     #[allow(dead_code)]
     pub stripe: StripeSettings,
@@ -213,7 +212,7 @@ impl Config {
         let github_app_user_token_refresh_enabled =
             parse_env_bool("GITHUB_APP_USER_TOKEN_REFRESH_ENABLED", false)?;
         let github_app_user_oauth_enabled = parse_env_bool("GITHUB_APP_USER_OAUTH_ENABLED", false)?;
-        let github_webhook_source_id = parse_optional_env_uuid("GITHUB_WEBHOOK_SOURCE_ID")?;
+        let github_webhook_source_id = parse_optional_env_string("GITHUB_WEBHOOK_SOURCE_ID");
 
         let api_secrets_key_b64 = require_env("API_SECRETS_ENCRYPTION_KEY")?;
         let api_secrets_encryption_key =
@@ -337,20 +336,17 @@ fn parse_optional_env_i64(name: &'static str) -> Result<Option<i64>, ConfigError
     }
 }
 
-fn parse_optional_env_uuid(name: &'static str) -> Result<Option<Uuid>, ConfigError> {
+fn parse_optional_env_string(name: &'static str) -> Option<String> {
     match env::var(name) {
         Ok(raw) => {
             let trimmed = raw.trim();
             if trimmed.is_empty() {
-                return Ok(None);
+                None
+            } else {
+                Some(trimmed.to_string())
             }
-            let value = Uuid::parse_str(trimmed).map_err(|err| ConfigError::InvalidEnvVar {
-                name,
-                reason: err.to_string(),
-            })?;
-            Ok(Some(value))
         }
-        Err(_) => Ok(None),
+        Err(_) => None,
     }
 }
 

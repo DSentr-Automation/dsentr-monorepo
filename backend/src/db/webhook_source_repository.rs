@@ -17,6 +17,11 @@ pub trait WebhookSourceRepository: Send + Sync {
         source_id: Uuid,
     ) -> Result<Option<WebhookSource>, sqlx::Error>;
 
+    async fn find_webhook_source_by_name(
+        &self,
+        name: &str,
+    ) -> Result<Option<WebhookSource>, sqlx::Error>;
+
     async fn list_webhook_sources_by_workspace(
         &self,
         workspace_id: Uuid,
