@@ -3,8 +3,8 @@ use serde_json::json;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::engine::{build_action_registry, execute_run};
 use crate::engine::actions::registry::ActionRegistry;
+use crate::engine::{build_action_registry, execute_run};
 use crate::models::workflow::Workflow;
 use crate::routes::github_provider_trigger_engine_bridge::ProviderTriggerExecutor;
 use crate::routes::github_provider_trigger_execution_context::ProviderTriggerExecutionContext;
@@ -29,12 +29,16 @@ impl GitHubProviderTriggerExecutor {
     }
 
     #[allow(dead_code)]
-    fn prepare_trigger_snapshot(&self, workflow: &Workflow, trigger_node_id: Uuid) -> serde_json::Value {
+    fn prepare_trigger_snapshot(
+        &self,
+        workflow: &Workflow,
+        trigger_node_id: Uuid,
+    ) -> serde_json::Value {
         let mut snapshot = workflow.data.clone();
-        
+
         // Set start node
         snapshot["_start_from_node"] = serde_json::Value::String(trigger_node_id.to_string());
-        
+
         // Set trigger context for webhook
         snapshot["_trigger_context"] = json!({
             "trigger_node_id": trigger_node_id.to_string(),
@@ -43,7 +47,8 @@ impl GitHubProviderTriggerExecutor {
         });
 
         // Prepare egress allowlist
-        let (egress_allowlist, rejected_entries) = normalize_egress_allowlist(workflow.egress_allowlist.clone());
+        let (egress_allowlist, rejected_entries) =
+            normalize_egress_allowlist(workflow.egress_allowlist.clone());
         if !rejected_entries.is_empty() {
             tracing::warn!(
                 workflow_id = %workflow.id,
@@ -76,15 +81,19 @@ impl ProviderTriggerExecutor for GitHubProviderTriggerExecutor {
     async fn execute_trigger(&self, context: &ProviderTriggerExecutionContext) {
         // Build idempotency key from context when delivery_id is available
         let idempotency_key = context.delivery_id.as_ref().map(|delivery| {
-            format!("github:{}:{}:{}",
-                delivery,
-                context.workflow_id,
-                context.trigger_node_id
+            format!(
+                "github:{}:{}:{}",
+                delivery, context.workflow_id, context.trigger_node_id
             )
         });
 
         // Load workflow using system access
-        let workflow = match self.state.workflow_repo.find_workflow_by_id_public(context.workflow_id).await {
+        let workflow = match self
+            .state
+            .workflow_repo
+            .find_workflow_by_id_public(context.workflow_id)
+            .await
+        {
             Ok(Some(workflow)) => workflow,
             Ok(None) => {
                 tracing::error!(%context.workflow_id, "GitHub provider trigger: workflow not found");
@@ -136,11 +145,11 @@ impl ProviderTriggerExecutor for GitHubProviderTriggerExecutor {
             Ok(outcome) => {
                 let run = outcome.run;
                 let run_id = run.id; // Capture ID before moving run
-                
+
                 // Record connection metadata events
                 let connection_metadata = workflow_connection_metadata::collect(&run.snapshot);
                 let triggered_by = "provider:github".to_string();
-                
+
                 for event in workflow_connection_metadata::build_run_events(
                     &run,
                     &triggered_by,

@@ -40,11 +40,7 @@ pub trait ProviderTriggerRepository: Send + Sync {
         enabled: bool,
     ) -> Result<ProviderTrigger, sqlx::Error>;
 
-    async fn delete(
-        &self,
-        workspace_id: Option<Uuid>,
-        id: Uuid,
-    ) -> Result<(), sqlx::Error>;
+    async fn delete(&self, workspace_id: Option<Uuid>, id: Uuid) -> Result<(), sqlx::Error>;
 
     async fn find_by_id(
         &self,

@@ -633,6 +633,7 @@ mod tests {
                 token_encryption_key: vec![0u8; 32],
             },
             github_app: crate::config::GitHubAppSettings::default(),
+            github_webhook_source_id: None,
             stripe: crate::config::StripeSettings {
                 client_id: "stub".into(),
                 secret_key: "stub".into(),

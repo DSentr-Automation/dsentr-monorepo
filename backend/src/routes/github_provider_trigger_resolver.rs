@@ -29,7 +29,8 @@ impl GitHubProviderTriggerResolver {
 
         // a. Lookup by installation_id if present
         if let Some(installation_id) = installation_id {
-            installation_matches = self.trigger_repo
+            installation_matches = self
+                .trigger_repo
                 .list_by_installation_event(
                     ProviderTriggerProvider::Github,
                     installation_id,
@@ -38,9 +39,10 @@ impl GitHubProviderTriggerResolver {
                 .await?;
         }
 
-        // b. Lookup by repository_id if present  
+        // b. Lookup by repository_id if present
         if let Some(repository_id) = repository_id {
-            repository_matches = self.trigger_repo
+            repository_matches = self
+                .trigger_repo
                 .list_by_repository_event(
                     ProviderTriggerProvider::Github,
                     repository_id,

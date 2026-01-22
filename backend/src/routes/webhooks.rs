@@ -18,11 +18,11 @@ use tracing::{error, info, warn, Span};
 use uuid::Uuid;
 
 use crate::config::WebhookIngressDedupeMode;
+use crate::db::postgres_provider_trigger_repository::PostgresProviderTriggerRepository;
 use crate::db::postgres_webhook_delivery_repository::PostgresWebhookDeliveryRepository;
 use crate::db::postgres_webhook_ingress_dedupe_repository::PostgresWebhookIngressDedupeRepository;
 use crate::db::postgres_webhook_source_repository::PostgresWebhookSourceRepository;
 use crate::db::postgres_webhook_subscription_repository::PostgresWebhookSubscriptionRepository;
-use crate::db::postgres_provider_trigger_repository::PostgresProviderTriggerRepository;
 use crate::db::webhook_delivery_repository::WebhookDeliveryRepository;
 use crate::db::webhook_ingress_dedupe_repository::{
     WebhookIngressDedupeKey, WebhookIngressDedupeRepository,
@@ -31,16 +31,16 @@ use crate::db::webhook_source_repository::WebhookSourceRepository;
 use crate::db::webhook_subscription_repository::WebhookSubscriptionRepository;
 use crate::db::workflow_repository::WorkflowRepository;
 use crate::db::workspace_repository::WorkspaceRepository;
-use crate::routes::github_provider_trigger_resolver::GitHubProviderTriggerResolver;
-use crate::routes::github_provider_trigger_handoff::build_handoff;
-use crate::routes::github_provider_trigger_execution_context::resolve_execution_contexts;
-use crate::routes::github_provider_trigger_dispatcher::build_dispatch_list;
-use crate::routes::github_provider_trigger_planner::build_execution_plan;
-use crate::routes::github_provider_trigger_engine_bridge::ProviderTriggerEngineBridge;
 use crate::models::webhook_source::WebhookSource;
 use crate::models::workspace::{WorkspaceMembershipSummary, WorkspaceRole};
 use crate::responses::JsonResponse;
 use crate::routes::auth::session::AuthSession;
+use crate::routes::github_provider_trigger_dispatcher::build_dispatch_list;
+use crate::routes::github_provider_trigger_engine_bridge::ProviderTriggerEngineBridge;
+use crate::routes::github_provider_trigger_execution_context::resolve_execution_contexts;
+use crate::routes::github_provider_trigger_handoff::build_handoff;
+use crate::routes::github_provider_trigger_planner::build_execution_plan;
+use crate::routes::github_provider_trigger_resolver::GitHubProviderTriggerResolver;
 use crate::routes::webhook_ingress_validation::{
     validate_webhook_signature, WebhookSignatureError, SIGNATURE_HEADER, TIMESTAMP_HEADER,
 };
@@ -1439,6 +1439,75 @@ pub async fn webhook_ingress(
     .await
 }
 
+pub async fn github_webhook_ingress_static(
+    State(app_state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let source_id = match app_state.config.github_webhook_source_id {
+        Some(id) => id,
+        None => {
+            error!("GITHUB_WEBHOOK_SOURCE_ID not configured");
+            return JsonResponse::server_error("GitHub webhook source not configured")
+                .into_response();
+        }
+    };
+
+    // Log the resolved webhook source ID for future debugging
+    info!(
+        %source_id,
+        "static GitHub App webhook handler using webhook source"
+    );
+
+    let dedupe_repo = PostgresWebhookIngressDedupeRepository {
+        pool: (*app_state.db_pool).clone(),
+    };
+    let delivery_repo = PostgresWebhookDeliveryRepository {
+        pool: (*app_state.db_pool).clone(),
+    };
+    let source_repo = PostgresWebhookSourceRepository {
+        pool: (*app_state.db_pool).clone(),
+        encryption_key: app_state.config.api_secrets_encryption_key.clone(),
+    };
+    let subscription_repo = PostgresWebhookSubscriptionRepository {
+        pool: (*app_state.db_pool).clone(),
+    };
+
+    // Create a minimal subscription context for the static webhook source
+    let subscription_context =
+        match fetch_subscription_context(app_state.db_pool.as_ref(), source_id).await {
+            Ok(Some(context)) => context,
+            Ok(None) => {
+                error!(%source_id, "GitHub webhook source not found in database");
+                return JsonResponse::server_error("GitHub webhook source not found")
+                    .into_response();
+            }
+            Err(err) => {
+                error!(?err, %source_id, "failed to resolve GitHub webhook source");
+                return JsonResponse::server_error("Failed to resolve GitHub webhook source")
+                    .into_response();
+            }
+        };
+
+    handle_github_webhook_ingress(
+        &app_state,
+        &dedupe_repo,
+        &delivery_repo,
+        &source_repo,
+        &subscription_repo,
+        app_state.workflow_repo.as_ref(),
+        app_state.config.webhook_ingress_dedupe_mode,
+        &app_state.config.api_secrets_encryption_key,
+        &subscription_context,
+        &headers,
+        body.as_ref(),
+        &app_state.config.webhook_verification_body_fields,
+        &app_state.config.webhook_verification_header_fields,
+        OffsetDateTime::now_utc(),
+    )
+    .await
+}
+
 pub async fn github_webhook_ingress(
     State(app_state): State<AppState>,
     Path(subscription_id): Path<Uuid>,
@@ -1865,22 +1934,42 @@ async fn handle_github_webhook_ingress(
         .map(|id| id.to_string());
 
     // Resolve provider triggers and log results
-    let resolver = GitHubProviderTriggerResolver::new(
-        Arc::new(PostgresProviderTriggerRepository { pool: (*app_state.db_pool).clone() })
-    );
+    let resolver =
+        GitHubProviderTriggerResolver::new(Arc::new(PostgresProviderTriggerRepository {
+            pool: (*app_state.db_pool).clone(),
+        }));
 
-    match resolver.resolve_triggers(&event_type, installation_id.as_deref(), repository_id.as_deref()).await {
+    match resolver
+        .resolve_triggers(
+            &event_type,
+            installation_id.as_deref(),
+            repository_id.as_deref(),
+        )
+        .await
+    {
         Ok(matches) => {
-            let _handoff = build_handoff(build_dispatch_list(build_execution_plan(matches.clone())), github_delivery);
-            let _contexts = match resolve_execution_contexts(_handoff.clone(), app_state.workflow_repo.as_ref()).await {
+            let _handoff = build_handoff(
+                build_dispatch_list(build_execution_plan(matches.clone())),
+                github_delivery,
+            );
+            let _contexts = match resolve_execution_contexts(
+                _handoff.clone(),
+                app_state.workflow_repo.as_ref(),
+            )
+            .await
+            {
                 Ok(contexts) => contexts,
                 Err(err) => {
                     error!(?err, "failed to resolve execution contexts");
-                    return JsonResponse::server_error("Failed to resolve execution contexts").into_response();
+                    return JsonResponse::server_error("Failed to resolve execution contexts")
+                        .into_response();
                 }
             };
             let bridge = ProviderTriggerEngineBridge::new();
-            let executor = crate::engine::provider_trigger_executor::GitHubProviderTriggerExecutor::new(app_state.clone());
+            let executor =
+                crate::engine::provider_trigger_executor::GitHubProviderTriggerExecutor::new(
+                    app_state.clone(),
+                );
             bridge.execute(&executor, _contexts).await;
             info!(
                 source_id = %source.id,
@@ -3140,6 +3229,7 @@ mod tests {
                 token_encryption_key: vec![0; 32],
             },
             github_app: crate::config::GitHubAppSettings::default(),
+            github_webhook_source_id: None,
             api_secrets_encryption_key: vec![1; 32],
             stripe: StripeSettings {
                 client_id: "stub".into(),

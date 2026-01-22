@@ -3,7 +3,9 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::db::provider_trigger_repository::ProviderTriggerRepository;
-use crate::models::provider_trigger::{CreateProviderTrigger, ProviderTrigger, ProviderTriggerProvider};
+use crate::models::provider_trigger::{
+    CreateProviderTrigger, ProviderTrigger, ProviderTriggerProvider,
+};
 
 pub struct PostgresProviderTriggerRepository {
     pub pool: PgPool,
@@ -159,11 +161,7 @@ impl ProviderTriggerRepository for PostgresProviderTriggerRepository {
         }
     }
 
-    async fn delete(
-        &self,
-        workspace_id: Option<Uuid>,
-        id: Uuid,
-    ) -> Result<(), sqlx::Error> {
+    async fn delete(&self, workspace_id: Option<Uuid>, id: Uuid) -> Result<(), sqlx::Error> {
         let result = sqlx::query!(
             "DELETE FROM provider_triggers WHERE id = $2 AND ($1::uuid IS NULL OR workspace_id = $1)",
             workspace_id,
