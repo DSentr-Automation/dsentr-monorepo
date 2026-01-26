@@ -46,3 +46,4 @@
 - Tightened GitHub trigger mapping determinism with an explicit event allowlist, canonical event selection key, and surfaced mapping errors for activation handling.
 - Workflow create/update now validates GitHub trigger activation (connections, repository access, event allowlist) and upserts provider triggers when publishing non-draft graphs.
 - GitHub trigger activation now guards on explicit workflow active state and treats trigger node ids as opaque strings for non-UUID graphs.
+- Workflow updates and deletes now remove provider triggers for removed/modified GitHub nodes or inactive workflows to keep trigger registrations in sync.

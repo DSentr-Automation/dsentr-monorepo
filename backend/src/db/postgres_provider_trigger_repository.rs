@@ -135,6 +135,49 @@ impl ProviderTriggerRepository for PostgresProviderTriggerRepository {
         Ok(triggers)
     }
 
+    async fn delete_by_workflow_id(
+        &self,
+        workspace_id: Option<Uuid>,
+        workflow_id: Uuid,
+    ) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query!(
+            r#"
+            DELETE FROM provider_triggers
+            WHERE workflow_id = $2
+            AND ($1::uuid IS NULL OR workspace_id = $1)
+            "#,
+            workspace_id,
+            workflow_id
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    async fn delete_by_workflow_node_id(
+        &self,
+        workspace_id: Option<Uuid>,
+        workflow_id: Uuid,
+        trigger_node_id: &str,
+    ) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query!(
+            r#"
+            DELETE FROM provider_triggers
+            WHERE workflow_id = $2
+            AND trigger_node_id = $3
+            AND ($1::uuid IS NULL OR workspace_id = $1)
+            "#,
+            workspace_id,
+            workflow_id,
+            trigger_node_id
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
     async fn update_enabled(
         &self,
         workspace_id: Option<Uuid>,

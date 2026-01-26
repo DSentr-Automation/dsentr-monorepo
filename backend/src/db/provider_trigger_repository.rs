@@ -31,6 +31,19 @@ pub trait ProviderTriggerRepository: Send + Sync {
         event_type: &str,
     ) -> Result<Vec<ProviderTrigger>, sqlx::Error>;
 
+    async fn delete_by_workflow_id(
+        &self,
+        workspace_id: Option<Uuid>,
+        workflow_id: Uuid,
+    ) -> Result<u64, sqlx::Error>;
+
+    async fn delete_by_workflow_node_id(
+        &self,
+        workspace_id: Option<Uuid>,
+        workflow_id: Uuid,
+        trigger_node_id: &str,
+    ) -> Result<u64, sqlx::Error>;
+
     // Enable/disable stays in the repo to enforce scoping and existence checks at the data boundary.
     // Routes must not duplicate these checks.
     async fn update_enabled(

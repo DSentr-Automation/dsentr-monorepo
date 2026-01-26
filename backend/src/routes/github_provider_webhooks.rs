@@ -424,6 +424,23 @@ mod tests {
             Ok(vec![])
         }
 
+        async fn delete_by_workflow_id(
+            &self,
+            _workspace_id: Option<Uuid>,
+            _workflow_id: Uuid,
+        ) -> Result<u64, sqlx::Error> {
+            Ok(0)
+        }
+
+        async fn delete_by_workflow_node_id(
+            &self,
+            _workspace_id: Option<Uuid>,
+            _workflow_id: Uuid,
+            _trigger_node_id: &str,
+        ) -> Result<u64, sqlx::Error> {
+            Ok(0)
+        }
+
         async fn update_enabled(
             &self,
             _workspace_id: Option<Uuid>,

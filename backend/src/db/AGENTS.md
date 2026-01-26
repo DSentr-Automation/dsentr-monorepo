@@ -69,3 +69,4 @@
 - Added a workflow repository helper for unmetered run creation so provider executions can bypass quota-gated paths explicitly.
 - Provider trigger inserts now upsert on the workflow/node/event unique key so re-activations refresh metadata without duplicating rows.
 - Provider trigger repositories now store trigger node ids as TEXT to match non-UUID frontend node identifiers.
+- Provider trigger repositories now expose delete-by-workflow and delete-by-node helpers so workflow updates can remove obsolete provider triggers.

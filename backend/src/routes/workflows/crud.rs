@@ -22,6 +22,7 @@ use crate::{
     },
     utils::change_history::log_workspace_history_event,
 };
+use std::collections::{BTreeMap, BTreeSet};
 use tracing::info;
 
 #[derive(Default, Deserialize)]
@@ -44,6 +45,74 @@ pub struct UpdateWorkflowPayload {
 
 struct GitHubActivationPlan {
     mappings: Vec<GitHubTriggerMapping>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GitHubTriggerSignature {
+    installation_id: String,
+    repository_id: Option<String>,
+    event_types: BTreeSet<String>,
+}
+
+fn github_trigger_signature_map(
+    mappings: &[GitHubTriggerMapping],
+) -> BTreeMap<String, GitHubTriggerSignature> {
+    let mut map = BTreeMap::new();
+    for mapping in mappings {
+        if map.contains_key(&mapping.trigger_node_id) {
+            continue;
+        }
+        let mut event_types = BTreeSet::new();
+        // Event types are normalized because comparisons should be case-insensitive.
+        // IDs are not normalized beyond trimming because they are numeric/case-stable identifiers.
+        for event_type in &mapping.event_types {
+            let normalized = event_type.trim().to_ascii_lowercase();
+            if !normalized.is_empty() {
+                event_types.insert(normalized);
+            }
+        }
+        // installation_id is expected to be numeric and case-stable, so only trim it.
+        let installation_id = mapping.installation_id.trim().to_string();
+        // repository_id is expected to be numeric and case-stable, so only trim it.
+        let repository_id = mapping
+            .repository_id
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let signature = GitHubTriggerSignature {
+            installation_id,
+            repository_id,
+            event_types,
+        };
+        map.insert(mapping.trigger_node_id.clone(), signature);
+    }
+    map
+}
+
+fn diff_github_trigger_nodes(
+    before: &[GitHubTriggerMapping],
+    after: &[GitHubTriggerMapping],
+) -> Vec<String> {
+    let before_map = github_trigger_signature_map(before);
+    let after_map = github_trigger_signature_map(after);
+    let mut removed = BTreeSet::new();
+
+    // Any change in trigger signature results in full removal and reinsert.
+    // Partial mutation is intentionally avoided for determinism.
+    for (node_id, before_sig) in before_map {
+        match after_map.get(&node_id) {
+            None => {
+                removed.insert(node_id);
+            }
+            Some(after_sig) => {
+                if before_sig != *after_sig {
+                    removed.insert(node_id);
+                }
+            }
+        }
+    }
+
+    removed.into_iter().collect()
 }
 
 fn github_activation_error(message: &str, code: &str, errors: Vec<Value>) -> Response {
@@ -407,6 +476,94 @@ async fn insert_github_provider_triggers(
         }
     }
 
+    Ok(())
+}
+
+async fn remove_provider_triggers_for_workflow(
+    trigger_repo: &PostgresProviderTriggerRepository,
+    workflow: &Workflow,
+    reason: &str,
+) -> Result<(), Response> {
+    match trigger_repo
+        .delete_by_workflow_id(workflow.workspace_id, workflow.id)
+        .await
+    {
+        Ok(count) => {
+            if count > 0 {
+                info!(
+                    workflow_id = %workflow.id,
+                    removed = count,
+                    reason = reason,
+                    "provider triggers removed"
+                );
+            }
+        }
+        Err(err) => {
+            eprintln!("Failed to remove provider triggers: {:?}", err);
+            return Err(JsonResponse::server_error(
+                "Failed to update GitHub triggers",
+            )
+            .into_response());
+        }
+    }
+
+    Ok(())
+}
+
+async fn sync_github_provider_triggers_on_update(
+    app_state: &AppState,
+    workflow: &Workflow,
+    before_graph: &Value,
+    plan: Option<GitHubActivationPlan>,
+) -> Result<(), Response> {
+    let trigger_repo = PostgresProviderTriggerRepository {
+        pool: (*app_state.db_pool).clone(),
+    };
+    let before_outcome = collect_github_trigger_mappings(before_graph);
+
+    let Some(plan) = plan else {
+        if !before_outcome.mappings.is_empty() {
+            remove_provider_triggers_for_workflow(
+                &trigger_repo,
+                workflow,
+                "workflow_not_active_or_missing_triggers",
+            )
+            .await?;
+        }
+        return Ok(());
+    };
+
+    let nodes_to_remove = diff_github_trigger_nodes(&before_outcome.mappings, &plan.mappings);
+    for trigger_node_id in nodes_to_remove {
+        match trigger_repo
+            .delete_by_workflow_node_id(
+                workflow.workspace_id,
+                workflow.id,
+                trigger_node_id.as_str(),
+            )
+            .await
+        {
+            Ok(count) => {
+                if count > 0 {
+                    info!(
+                        workflow_id = %workflow.id,
+                        trigger_node_id = %trigger_node_id,
+                        removed = count,
+                        "provider triggers removed for node"
+                    );
+                }
+            }
+            Err(err) => {
+                eprintln!("Failed to remove provider triggers: {:?}", err);
+                return Err(JsonResponse::server_error(
+                    "Failed to update GitHub triggers",
+                )
+                .into_response());
+            }
+        }
+    }
+
+    insert_github_provider_triggers(app_state, workflow, Some(plan)).await?;
     Ok(())
 }
 
@@ -918,8 +1075,13 @@ pub async fn update_workflow(
                     return plan_violation_response(vec![violation]);
                 }
             }
-            if let Err(response) =
-                insert_github_provider_triggers(&app_state, &workflow, github_activation_plan).await
+            if let Err(response) = sync_github_provider_triggers_on_update(
+                &app_state,
+                &workflow,
+                &before.data,
+                github_activation_plan,
+            )
+            .await
             {
                 return response;
             }
@@ -1208,6 +1370,16 @@ pub async fn delete_workflow(
         .await
     {
         Ok(true) => {
+            let trigger_repo = PostgresProviderTriggerRepository {
+                pool: (*app_state.db_pool).clone(),
+            };
+            // provider_triggers.workflow_id has ON DELETE CASCADE; zero-row deletions are expected.
+            if let Err(response) =
+                remove_provider_triggers_for_workflow(&trigger_repo, &workflow, "workflow_deleted")
+                    .await
+            {
+                return response;
+            }
             if let Some(workspace_id) = workflow.workspace_id {
                 let event = vec![json!({
                     "path": "workflow.deleted",
