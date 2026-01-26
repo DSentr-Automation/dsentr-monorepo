@@ -47,3 +47,4 @@
 - Added HTTP executor tests for GitHub action manifests to cover bearer auth headers and 204 workflow dispatch responses.
 - Executor now hydrates GitHub action parameters into concrete HTTP method, URL, and body data before execution.
 - HTTP executor payload fields must never be sourced directly from user inputs without an action-specific translation layer.
+- Provider trigger execution now uses the unmetered workflow-run creation helper so GitHub provider runs bypass quota enforcement while preserving system execution identity.

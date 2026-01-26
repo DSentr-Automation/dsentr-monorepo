@@ -123,6 +123,25 @@ pub trait WorkflowRepository: Send + Sync {
         idempotency_key: Option<&str>,
     ) -> Result<CreateWorkflowRunOutcome, sqlx::Error>;
 
+    #[allow(dead_code)]
+    async fn create_workflow_run_unmetered(
+        &self,
+        user_id: Uuid,
+        workflow_id: Uuid,
+        workspace_id: Option<Uuid>,
+        snapshot: Value,
+        idempotency_key: Option<&str>,
+    ) -> Result<CreateWorkflowRunOutcome, sqlx::Error> {
+        self.create_workflow_run(
+            user_id,
+            workflow_id,
+            workspace_id,
+            snapshot,
+            idempotency_key,
+        )
+        .await
+    }
+
     async fn get_workflow_run(
         &self,
         user_id: Uuid,

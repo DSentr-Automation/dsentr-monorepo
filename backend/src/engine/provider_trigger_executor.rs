@@ -130,10 +130,11 @@ impl ProviderTriggerExecutor for GitHubProviderTriggerExecutor {
         hydrate_secrets_into_snapshot(&mut snapshot, &secret_store);
 
         // Create workflow run following manual trigger pattern
+        // If provider execution can ever fail due to quota logic, the implementation is wrong even if tests pass.
         match self
             .state
             .workflow_repo
-            .create_workflow_run(
+            .create_workflow_run_unmetered(
                 workflow.user_id, // Use workflow owner (system execution identity)
                 context.workflow_id,
                 workflow.workspace_id,
