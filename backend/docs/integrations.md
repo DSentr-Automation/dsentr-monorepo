@@ -69,6 +69,11 @@ GitHub webhooks are supported as a GitHub App webhook feed. Webhook subscription
 - Event type mapping: DSentr uses the `X-GitHub-Event` header (`github.<event>`), and appends `.action` when the payload includes an action (for example, `github.issues.opened`)
 - Payload event fields are ignored for event type derivation
 
+Provider webhook routing (GitHub App):
+- Provider webhooks are shared and automatic.
+- There is no webhook URL per workflow; DSentr uses the single `/webhooks/github` endpoint.
+- Activation is driven by workflow publish state (publishing a workflow with a GitHub trigger registers it for routing).
+
 ## Adding a new integration
 Step-by-step:
 1. Add a new manifest entry in `build_integration_registry` with the correct `integration_id`, `auth_type`, `token_scope`, `ownership_model`, `provider_constraints`, `ui_metadata`, and (if OAuth) `oauth_metadata`.

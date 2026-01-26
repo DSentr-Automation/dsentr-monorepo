@@ -121,13 +121,8 @@ const GITHUB_TRIGGER_EVENT_KEY_ALIASES: [&str; 5] = [
     "actions",
 ];
 #[allow(dead_code)]
-const GITHUB_TRIGGER_ALLOWED_EVENTS: [&str; 5] = [
-    "issues",
-    "pull_request",
-    "push",
-    "release",
-    "workflow_run",
-];
+const GITHUB_TRIGGER_ALLOWED_EVENTS: [&str; 5] =
+    ["issues", "pull_request", "push", "release", "workflow_run"];
 
 // GitHub trigger config schema (workflow.data.nodes[].data):
 // - installation_id / installationId: required numeric identifier for the GitHub App installation

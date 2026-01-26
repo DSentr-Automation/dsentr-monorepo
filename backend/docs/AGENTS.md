@@ -23,3 +23,4 @@
 - Added an action registry note covering manifests, execution semantics, and no-branching rules for engine dispatch.
 - Added an integrations manifest guide so backend updates follow the manifest contract and avoid provider-specific routing changes.
 - Documented GitHub OAuth redirect settings and webhook ingress requirements so setup matches the GitHub App integration.
+- Documented provider webhook routing as shared/automatic with publish-driven activation to align Settings guidance.

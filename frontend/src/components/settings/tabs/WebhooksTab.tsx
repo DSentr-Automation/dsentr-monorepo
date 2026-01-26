@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import ConfirmDialog from '@/components/ui/dialog/ConfirmDialog'
+import ProviderWebhooks from '@/components/settings/ProviderWebhooks'
 import WebhookSourceSubscriptions from '@/components/settings/tabs/WebhookSourceSubscriptions'
 import { listWorkflows, type WorkflowRecord } from '@/lib/workflowApi'
 import {
@@ -11,6 +12,7 @@ import {
 } from '@/lib/webhookSourcesApi'
 import { API_BASE_URL } from '@/lib/config'
 import { errorMessage } from '@/lib/errorMessage'
+import { normalizePlanTier } from '@/lib/planTiers'
 import { selectCurrentWorkspace, useAuth } from '@/stores/auth'
 
 const RELATIVE_TIME_FORMATTER = new Intl.RelativeTimeFormat('en', {
@@ -104,8 +106,16 @@ export default function WebhooksTab() {
   }, [])
 
   const currentWorkspace = useAuth(selectCurrentWorkspace)
+  const userPlan = useAuth((state) => state.user?.plan ?? null)
   const activeWorkspaceId = currentWorkspace?.workspace.id ?? null
   const workspaceRole = currentWorkspace?.role ?? 'viewer'
+  const planTier = useMemo(
+    () =>
+      normalizePlanTier(
+        currentWorkspace?.workspace.plan ?? userPlan ?? undefined
+      ),
+    [currentWorkspace?.workspace.plan, userPlan]
+  )
   const canManageWebhookSources = ['owner', 'admin', 'user'].includes(
     workspaceRole
   )
@@ -441,6 +451,7 @@ export default function WebhooksTab() {
           </div>
         </div>
       </div>
+      <ProviderWebhooks workspaceId={activeWorkspaceId} planTier={planTier} />
       <div className="border-t border-zinc-200 dark:border-zinc-700 pt-3">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>

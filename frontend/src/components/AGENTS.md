@@ -45,6 +45,7 @@
 - WebhooksTab: Added per-source subscriptions lists plus create/delete flows so webhook routing is managed from Settings.
 - WebhooksTab: Documented webhook trigger detection assumptions so the subscriptions UI stays aligned with trigger schema changes.
 - WebhooksTab: Updated webhook ingress copy and examples to reflect source-scoped endpoints and event_type routing.
+- WebhooksTab: Added a read-only Provider Webhooks section (workspace plan only) that explains shared GitHub App webhooks without any mutation controls.
 - Workflow trigger config: webhook triggers now store only event_type, drop deprecated source fields during load/save, and require event_type before saving workflows.
 - Workflow editor: removed webhook-ingress warning copy from the HTTP Request action so inbound guidance stays in Settings > Webhooks.
 - Action node summaries now drop the legacy webhook action branch so the editor no longer surfaces obsolete webhook action details.
@@ -97,4 +98,3 @@ Styles live in `src/css/globals.css` under `.themed-scroll` and were previously 
 - Workflow nodes: dashed summary areas now show an explicit click affordance (hover overlay + pointer cursor) and open the flyout on mouseup without interfering with node dragging, fixing missed flyout openings when using the on-card hint zone.
 - Delay and Formatter nodes now use the same dashed hint surface to open their flyouts, matching the rest of the node cards.
 - Settings > Integrations now maps `icon_key: "github"` to a GitHub logo component so the GitHub integration card renders its brand icon.
-

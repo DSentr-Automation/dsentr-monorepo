@@ -114,7 +114,8 @@ impl ProviderTriggerExecutor for GitHubProviderTriggerExecutor {
         };
 
         // Prepare snapshot with trigger context using helper function
-        let mut snapshot = self.prepare_trigger_snapshot(&workflow, context.trigger_node_id.as_str());
+        let mut snapshot =
+            self.prepare_trigger_snapshot(&workflow, context.trigger_node_id.as_str());
 
         // Decrypt and hydrate secrets
         let (secret_store, _) = match decrypt_secret_store(

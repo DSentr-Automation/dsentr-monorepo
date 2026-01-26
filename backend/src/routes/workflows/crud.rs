@@ -3,8 +3,8 @@ use super::{
         can_access_workflow_in_context, can_access_workspace_in_context,
         collect_github_trigger_mappings, diff_user_nodes_only, enforce_solo_workflow_limit,
         is_supported_github_event_type, is_unique_violation, membership_roles_map,
-        plan_context_for_user, plan_violation_response, sync_workflow_schedule,
-        workflow_is_active, GitHubTriggerMapping, GitHubTriggerMappingError, PlanContext,
+        plan_context_for_user, plan_violation_response, sync_workflow_schedule, workflow_is_active,
+        GitHubTriggerMapping, GitHubTriggerMappingError, PlanContext,
     },
     prelude::*,
 };
@@ -19,9 +19,7 @@ use crate::{
         oauth_token::ConnectedOAuthProvider,
         provider_trigger::{CreateProviderTrigger, ProviderTriggerProvider},
     },
-    services::oauth::{
-        account_service::OAuthAccountError, workspace_service::WorkspaceOAuthError,
-    },
+    services::oauth::{account_service::OAuthAccountError, workspace_service::WorkspaceOAuthError},
     utils::change_history::log_workspace_history_event,
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -214,8 +212,7 @@ async fn prepare_github_trigger_activation(
         ));
     }
 
-    let connection =
-        resolve_github_connection_context(app_state, owner_id, workspace_id).await?;
+    let connection = resolve_github_connection_context(app_state, owner_id, workspace_id).await?;
     let mut invalid_installations = Vec::new();
     for mapping in &outcome.mappings {
         let mapping_installation = mapping.installation_id.trim();
@@ -236,12 +233,8 @@ async fn prepare_github_trigger_activation(
         ));
     }
 
-    validate_github_repository_access(
-        app_state,
-        &connection.access_token,
-        &outcome.mappings,
-    )
-    .await?;
+    validate_github_repository_access(app_state, &connection.access_token, &outcome.mappings)
+        .await?;
 
     Ok(Some(GitHubActivationPlan {
         mappings: outcome.mappings,
@@ -262,10 +255,10 @@ async fn resolve_github_connection_context(
             Ok(records) => records,
             Err(err) => {
                 eprintln!("Failed to load workspace GitHub connections: {:?}", err);
-                return Err(JsonResponse::server_error(
-                    "Failed to validate GitHub connection",
-                )
-                .into_response());
+                return Err(
+                    JsonResponse::server_error("Failed to validate GitHub connection")
+                        .into_response(),
+                );
             }
         };
         if connections.is_empty() {
@@ -297,38 +290,38 @@ async fn resolve_github_connection_context(
                 }
                 Err(WorkspaceOAuthError::OAuth(OAuthAccountError::Database(err))) => {
                     eprintln!("Failed to decrypt GitHub workspace token: {:?}", err);
-                    return Err(JsonResponse::server_error(
-                        "Failed to validate GitHub connection",
-                    )
-                    .into_response());
+                    return Err(
+                        JsonResponse::server_error("Failed to validate GitHub connection")
+                            .into_response(),
+                    );
                 }
                 Err(WorkspaceOAuthError::OAuth(OAuthAccountError::Encryption(err))) => {
                     eprintln!("Failed to decrypt GitHub workspace token: {:?}", err);
-                    return Err(JsonResponse::server_error(
-                        "Failed to validate GitHub connection",
-                    )
-                    .into_response());
+                    return Err(
+                        JsonResponse::server_error("Failed to validate GitHub connection")
+                            .into_response(),
+                    );
                 }
                 Err(WorkspaceOAuthError::Database(err)) => {
                     eprintln!("Failed to load GitHub workspace token: {:?}", err);
-                    return Err(JsonResponse::server_error(
-                        "Failed to validate GitHub connection",
-                    )
-                    .into_response());
+                    return Err(
+                        JsonResponse::server_error("Failed to validate GitHub connection")
+                            .into_response(),
+                    );
                 }
                 Err(WorkspaceOAuthError::Encryption(err)) => {
                     eprintln!("Failed to load GitHub workspace token: {:?}", err);
-                    return Err(JsonResponse::server_error(
-                        "Failed to validate GitHub connection",
-                    )
-                    .into_response());
+                    return Err(
+                        JsonResponse::server_error("Failed to validate GitHub connection")
+                            .into_response(),
+                    );
                 }
                 Err(WorkspaceOAuthError::OAuth(OAuthAccountError::Http(err))) => {
                     eprintln!("GitHub connection validation HTTP error: {:?}", err);
-                    return Err(JsonResponse::server_error(
-                        "Failed to validate GitHub connection",
-                    )
-                    .into_response());
+                    return Err(
+                        JsonResponse::server_error("Failed to validate GitHub connection")
+                            .into_response(),
+                    );
                 }
                 Err(WorkspaceOAuthError::OAuth(_))
                 | Err(WorkspaceOAuthError::NotFound)
@@ -367,8 +360,9 @@ async fn resolve_github_connection_context(
         Ok(records) => records,
         Err(err) => {
             eprintln!("Failed to load user GitHub tokens: {:?}", err);
-            return Err(JsonResponse::server_error("Failed to validate GitHub connection")
-                .into_response());
+            return Err(
+                JsonResponse::server_error("Failed to validate GitHub connection").into_response(),
+            );
         }
     };
 
@@ -401,18 +395,24 @@ async fn resolve_github_connection_context(
             }
             Err(OAuthAccountError::Database(err)) => {
                 eprintln!("Failed to decrypt GitHub token: {:?}", err);
-                return Err(JsonResponse::server_error("Failed to validate GitHub connection")
-                    .into_response());
+                return Err(
+                    JsonResponse::server_error("Failed to validate GitHub connection")
+                        .into_response(),
+                );
             }
             Err(OAuthAccountError::Encryption(err)) => {
                 eprintln!("Failed to decrypt GitHub token: {:?}", err);
-                return Err(JsonResponse::server_error("Failed to validate GitHub connection")
-                    .into_response());
+                return Err(
+                    JsonResponse::server_error("Failed to validate GitHub connection")
+                        .into_response(),
+                );
             }
             Err(OAuthAccountError::Http(err)) => {
                 eprintln!("GitHub connection validation HTTP error: {:?}", err);
-                return Err(JsonResponse::server_error("Failed to validate GitHub connection")
-                    .into_response());
+                return Err(
+                    JsonResponse::server_error("Failed to validate GitHub connection")
+                        .into_response(),
+                );
             }
             Err(_) => continue,
         }
@@ -581,10 +581,10 @@ async fn insert_github_provider_triggers(
                 }
                 Err(err) => {
                     eprintln!("Failed to upsert provider trigger: {:?}", err);
-                    return Err(JsonResponse::server_error(
-                        "Failed to activate GitHub triggers",
-                    )
-                    .into_response());
+                    return Err(
+                        JsonResponse::server_error("Failed to activate GitHub triggers")
+                            .into_response(),
+                    );
                 }
             }
         }
@@ -614,10 +614,9 @@ async fn remove_provider_triggers_for_workflow(
         }
         Err(err) => {
             eprintln!("Failed to remove provider triggers: {:?}", err);
-            return Err(JsonResponse::server_error(
-                "Failed to update GitHub triggers",
-            )
-            .into_response());
+            return Err(
+                JsonResponse::server_error("Failed to update GitHub triggers").into_response(),
+            );
         }
     }
 
@@ -669,10 +668,9 @@ async fn sync_github_provider_triggers_on_update(
             }
             Err(err) => {
                 eprintln!("Failed to remove provider triggers: {:?}", err);
-                return Err(JsonResponse::server_error(
-                    "Failed to update GitHub triggers",
-                )
-                .into_response());
+                return Err(
+                    JsonResponse::server_error("Failed to update GitHub triggers").into_response(),
+                );
             }
         }
     }
@@ -1154,17 +1152,13 @@ pub async fn update_workflow(
 
     let owner_id = existing.user_id;
     let before = existing.clone();
-    let github_activation_plan = match prepare_github_trigger_activation(
-        &app_state,
-        owner_id,
-        existing.workspace_id,
-        &data,
-    )
-    .await
-    {
-        Ok(plan) => plan,
-        Err(response) => return response,
-    };
+    let github_activation_plan =
+        match prepare_github_trigger_activation(&app_state, owner_id, existing.workspace_id, &data)
+            .await
+        {
+            Ok(plan) => plan,
+            Err(response) => return response,
+        };
 
     match app_state
         .workflow_repo

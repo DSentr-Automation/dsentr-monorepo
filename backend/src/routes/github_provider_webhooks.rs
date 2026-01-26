@@ -464,6 +464,7 @@ mod tests {
     }
 
     #[derive(Default)]
+    #[allow(clippy::type_complexity)]
     struct StubWebhookIngressDedupeRepo {
         keys: Mutex<HashSet<(Uuid, String, Vec<u8>, String, i64)>>,
     }

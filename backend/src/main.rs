@@ -77,6 +77,7 @@ use routes::{
         secrets::{delete_secret, list_secrets, upsert_secret},
         user_settings::{get_user_settings, update_user_settings},
     },
+    settings::webhooks::list_provider_webhooks,
     slack::list_channels as list_slack_channels,
     webhooks::{
         create_webhook_source, create_webhook_subscription, create_webhook_subscription_for_source,
@@ -662,6 +663,10 @@ async fn main() -> Result<()> {
         .layer(csrf_layer.clone())
         .layer(session_guard.clone());
 
+    let settings_routes = Router::new()
+        .route("/webhooks/providers", get(list_provider_webhooks))
+        .layer(session_guard.clone());
+
     let oauth_public_routes = Router::new()
         .route("/google/start", get(google_connect_start))
         .route("/google/callback", get(google_connect_callback))
@@ -829,6 +834,7 @@ async fn main() -> Result<()> {
         .nest("/api/asana", asana_routes)
         .nest("/api/integrations", integrations_routes)
         .nest("/api/options", options_routes)
+        .nest("/api/settings", settings_routes)
         .nest("/api/admin", admin_routes)
         .with_state(state)
         .layer(TraceLayer::new_for_http())

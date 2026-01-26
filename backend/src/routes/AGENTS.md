@@ -118,3 +118,4 @@
 - GitHub provider trigger dispatch now treats `trigger_node_id` as an opaque string so non-UUID workflow node ids can activate provider runs.
 - GitHub provider webhook route tests now include provider-trigger deletion helpers in the stub repo to keep test doubles aligned with the repository trait.
 - GitHub provider trigger resolution now emits a safe debug log with counts only (no payloads or IDs) for observability.
+- Added a read-only settings endpoint to list provider webhook metadata per workspace for the Webhooks UI.

@@ -20,6 +20,7 @@ pub mod microsoft;
 pub mod oauth;
 pub mod options;
 pub mod plan_limits;
+pub mod settings;
 pub mod slack;
 pub mod stripe;
 pub(crate) mod webhook_ingress_validation;
