@@ -1,7 +1,9 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::db::provider_trigger_repository::ProviderTriggerRepository;
 use crate::models::provider_trigger::{ProviderTrigger, ProviderTriggerProvider};
+use tracing::debug;
 
 #[derive(Clone)]
 pub struct ProviderTriggerMatch {
@@ -50,6 +52,21 @@ impl GitHubProviderTriggerResolver {
                 )
                 .await?;
         }
+
+        let mut workflow_ids = HashSet::new();
+        for trigger in installation_matches.iter().chain(repository_matches.iter()) {
+            workflow_ids.insert(trigger.workflow_id);
+        }
+        let resolved_trigger_count = installation_matches.len() + repository_matches.len();
+        debug!(
+            provider = "github",
+            event_type = event_type,
+            installation_id_present = installation_id.is_some(),
+            repository_id_present = repository_id.is_some(),
+            resolved_trigger_count = resolved_trigger_count,
+            resolved_workflow_count = workflow_ids.len(),
+            "Resolved GitHub provider triggers"
+        );
 
         Ok(ProviderTriggerMatch {
             installation_matches,
