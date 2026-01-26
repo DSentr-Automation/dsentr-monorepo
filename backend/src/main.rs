@@ -57,6 +57,7 @@ use routes::{
     },
     dashboard::dashboard_handler,
     early_access::handle_early_access,
+    github_provider_webhooks::github_provider_webhook_ingress,
     integrations::notion::{get_notion_database_schema, list_notion_databases},
     issues::{
         get_issue_with_messages, list_user_issues, mark_issue_messages_read, reply_to_issue,
@@ -80,10 +81,9 @@ use routes::{
     webhooks::{
         create_webhook_source, create_webhook_subscription, create_webhook_subscription_for_source,
         delete_webhook_source, delete_webhook_subscription, delete_webhook_subscription_by_id,
-        github_webhook_ingress, github_webhook_ingress_static, list_webhook_sources,
-        list_webhook_subscriptions, list_webhook_subscriptions_for_source,
-        rotate_webhook_source_secret, update_webhook_source_enabled,
-        update_webhook_subscription_enabled, webhook_ingress,
+        github_webhook_ingress, list_webhook_sources, list_webhook_subscriptions,
+        list_webhook_subscriptions_for_source, rotate_webhook_source_secret,
+        update_webhook_source_enabled, update_webhook_subscription_enabled, webhook_ingress,
     },
     workflows::{
         cancel_all_runs_for_workflow, cancel_workflow_run, create_workflow, delete_workflow,
@@ -811,8 +811,8 @@ async fn main() -> Result<()> {
             "/api/webhooks/github/{subscription_id}",
             post(github_webhook_ingress),
         )
-        // Static GitHub App webhook ingress (env-driven source)
-        .route("/webhooks/github", post(github_webhook_ingress_static))
+        // Provider GitHub webhook ingress
+        .route("/webhooks/github", post(github_provider_webhook_ingress))
         .nest("/api/auth", auth_routes) // <-- your auth routes with CSRF selectively applied
         .nest("/api/account", account_routes)
         .nest("/api/workflows", workflow_routes)

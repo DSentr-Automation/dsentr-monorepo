@@ -68,3 +68,6 @@
 - Collapsed GitHub HTTP actions into a single operation-based manifest so GitHub issue, pull request, release, label, and workflow dispatch actions share one catalog entry.
 - Main router now mounts GitHub App webhook ingress for `/api/webhooks/github/:subscription_id`, reusing the webhook pipeline after signature validation and header-derived event typing.
 - GitHub action manifest operations now include labeled enum options so the catalog can surface UI-friendly labels without changing execution behavior.
+- Added a provider-only GitHub webhook ingress at `/webhooks/github` with header/signature validation and ping short-circuiting so provider triggers can run without the user webhook pipeline.
+- Provider GitHub webhook ingress now uses delivery-id idempotency, 403 signature failures, and provider-scoped tracing fields while returning 200 for accepted/duplicate events.
+- Legacy GitHub webhook ingress helpers remain in the codebase (marked dead code) to preserve the prior static workflow without wiring the endpoint.

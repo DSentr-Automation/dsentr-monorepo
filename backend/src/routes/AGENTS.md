@@ -109,3 +109,7 @@
 - Route-level test configs now seed GitHub OAuth settings so shared Config builders stay aligned with OAuth providers.
 - Route test configs now include GitHub App settings to keep updated OAuth wiring and GitHub App validation consistent.
 - Added GitHub App webhook ingress at `/api/webhooks/github/:subscription_id` with signature verification, header-derived event types, and ping short-circuiting to align GitHub webhooks with the existing ingress pipeline.
+- Added a provider-specific GitHub webhook ingress for `/webhooks/github` that validates required headers/signatures, normalizes event types, and bypasses the user webhook dispatch flow.
+- Provider GitHub webhook ingress now returns 403 on signature failures, 200 on success/duplicates, and dedupes by delivery id with provider-scoped tracing fields for event/run visibility.
+- Kept the legacy GitHub webhook ingress handler in place but marked it as dead code after wiring the provider-only endpoint.
+- Provider GitHub webhook ingress now records delivery-id dedupe before JSON parsing so duplicate malformed payloads short-circuit cleanly.

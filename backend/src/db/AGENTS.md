@@ -63,3 +63,5 @@
 - Removed workflow-scoped webhook token/replay helpers from workflow repositories, and workspace webhook-signing resets now target webhook sources instead of workflows.
 - Added webhook delivery repository helpers (trait + Postgres) so ingress can record delivery status updates without coupling to workflow transactions.
 - Allowed the webhook delivery `record_delivery` trait signature to keep its full parameter set without tripping clippy warnings.
+- Added a provider webhook dedupe repository to persist delivery ids for idempotent provider ingress handling.
+- Marked `find_webhook_source_by_name` as allowed dead code so the legacy GitHub webhook lookup stays available without being wired in the new provider ingress.

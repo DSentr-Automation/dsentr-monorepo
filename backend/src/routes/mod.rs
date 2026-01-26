@@ -12,6 +12,7 @@ pub mod github_provider_trigger_execution_context;
 pub mod github_provider_trigger_handoff;
 pub mod github_provider_trigger_planner;
 pub mod github_provider_trigger_resolver;
+pub mod github_provider_webhooks;
 pub mod google;
 pub mod integrations;
 pub mod issues;

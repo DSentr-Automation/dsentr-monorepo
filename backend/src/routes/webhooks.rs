@@ -1439,6 +1439,7 @@ pub async fn webhook_ingress(
     .await
 }
 
+#[allow(dead_code)]
 pub async fn github_webhook_ingress_static(
     State(app_state): State<AppState>,
     headers: HeaderMap,

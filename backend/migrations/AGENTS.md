@@ -59,3 +59,4 @@
 - Updated migration overview to drop legacy workflow webhook replay references now that ingress is source-based.
 - Added `webhook_deliveries` table with source/subscription/received-at indexes to track inbound webhook delivery attempts.
 - Added the GitHub OAuth provider value to the `oauth_connection_provider` enum so GitHub connections can be persisted.
+- Added `provider_webhook_dedupe` table to store provider delivery ids for idempotent webhook ingestion.

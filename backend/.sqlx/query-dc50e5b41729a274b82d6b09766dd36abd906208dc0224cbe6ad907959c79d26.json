@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO provider_webhook_dedupe (provider, delivery_id, received_at)\n            VALUES ($1, $2, $3)\n            ON CONFLICT (provider, delivery_id) DO NOTHING\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "dc50e5b41729a274b82d6b09766dd36abd906208dc0224cbe6ad907959c79d26"
+}

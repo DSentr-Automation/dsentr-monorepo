@@ -17,6 +17,7 @@ pub trait WebhookSourceRepository: Send + Sync {
         source_id: Uuid,
     ) -> Result<Option<WebhookSource>, sqlx::Error>;
 
+    #[allow(dead_code)]
     async fn find_webhook_source_by_name(
         &self,
         name: &str,
