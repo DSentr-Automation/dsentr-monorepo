@@ -10,8 +10,10 @@ use super::{
 };
 use crate::{
     db::{
+        oauth_token_repository::UserOAuthTokenRepository,
         postgres_oauth_token_repository::PostgresUserOAuthTokenRepository,
         postgres_provider_trigger_repository::PostgresProviderTriggerRepository,
+        provider_trigger_repository::ProviderTriggerRepository,
     },
     models::{
         oauth_token::ConnectedOAuthProvider,
@@ -293,16 +295,28 @@ async fn resolve_github_connection_context(
                     }
                     missing_installation_id = true;
                 }
-                Err(WorkspaceOAuthError::OAuth(OAuthAccountError::Database(err)))
-                | Err(WorkspaceOAuthError::OAuth(OAuthAccountError::Encryption(err))) => {
+                Err(WorkspaceOAuthError::OAuth(OAuthAccountError::Database(err))) => {
                     eprintln!("Failed to decrypt GitHub workspace token: {:?}", err);
                     return Err(JsonResponse::server_error(
                         "Failed to validate GitHub connection",
                     )
                     .into_response());
                 }
-                Err(WorkspaceOAuthError::Database(err))
-                | Err(WorkspaceOAuthError::Encryption(err)) => {
+                Err(WorkspaceOAuthError::OAuth(OAuthAccountError::Encryption(err))) => {
+                    eprintln!("Failed to decrypt GitHub workspace token: {:?}", err);
+                    return Err(JsonResponse::server_error(
+                        "Failed to validate GitHub connection",
+                    )
+                    .into_response());
+                }
+                Err(WorkspaceOAuthError::Database(err)) => {
+                    eprintln!("Failed to load GitHub workspace token: {:?}", err);
+                    return Err(JsonResponse::server_error(
+                        "Failed to validate GitHub connection",
+                    )
+                    .into_response());
+                }
+                Err(WorkspaceOAuthError::Encryption(err)) => {
                     eprintln!("Failed to load GitHub workspace token: {:?}", err);
                     return Err(JsonResponse::server_error(
                         "Failed to validate GitHub connection",
@@ -385,7 +399,12 @@ async fn resolve_github_connection_context(
                 }
                 missing_installation_id = true;
             }
-            Err(OAuthAccountError::Database(err)) | Err(OAuthAccountError::Encryption(err)) => {
+            Err(OAuthAccountError::Database(err)) => {
+                eprintln!("Failed to decrypt GitHub token: {:?}", err);
+                return Err(JsonResponse::server_error("Failed to validate GitHub connection")
+                    .into_response());
+            }
+            Err(OAuthAccountError::Encryption(err)) => {
                 eprintln!("Failed to decrypt GitHub token: {:?}", err);
                 return Err(JsonResponse::server_error("Failed to validate GitHub connection")
                     .into_response());

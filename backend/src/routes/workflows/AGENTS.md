@@ -48,3 +48,4 @@
 - GitHub trigger activation now guards on explicit workflow active state and treats trigger node ids as opaque strings for non-UUID graphs.
 - Workflow updates and deletes now remove provider triggers for removed/modified GitHub nodes or inactive workflows to keep trigger registrations in sync.
 - GitHub trigger activation now validates installation/repository id formats and enforces that trigger installations match the selected GitHub connection with stable error codes.
+- GitHub workflow activation now handles workspace/personal OAuth error branches explicitly so GitHub connection validation remains stable when error types differ.

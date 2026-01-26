@@ -12,7 +12,8 @@ pub fn build_execution_plan(matches: ProviderTriggerMatch) -> ProviderTriggerExe
 
     // Repository-level triggers first (preserving original order)
     for trigger in matches.repository_matches {
-        if seen_nodes.insert((trigger.workflow_id, trigger.trigger_node_id)) {
+        let key = (trigger.workflow_id, trigger.trigger_node_id.clone());
+        if seen_nodes.insert(key) {
             ordered_triggers.push(trigger);
         }
         // If duplicate in installation matches, skip repo-level one
@@ -21,7 +22,8 @@ pub fn build_execution_plan(matches: ProviderTriggerMatch) -> ProviderTriggerExe
     // Installation-level triggers second (preserving original order)
     for trigger in matches.installation_matches {
         // Only add if not already seen via repository match
-        if seen_nodes.insert((trigger.workflow_id, trigger.trigger_node_id)) {
+        let key = (trigger.workflow_id, trigger.trigger_node_id.clone());
+        if seen_nodes.insert(key) {
             ordered_triggers.push(trigger);
         }
         // If duplicate in installation matches, skip installation-level one

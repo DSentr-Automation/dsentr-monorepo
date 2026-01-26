@@ -71,3 +71,4 @@
 - Added a provider-only GitHub webhook ingress at `/webhooks/github` with header/signature validation and ping short-circuiting so provider triggers can run without the user webhook pipeline.
 - Provider GitHub webhook ingress now uses delivery-id idempotency, 403 signature failures, and provider-scoped tracing fields while returning 200 for accepted/duplicate events.
 - Legacy GitHub webhook ingress helpers remain in the codebase (marked dead code) to preserve the prior static workflow without wiring the endpoint.
+- Provider trigger execution planning now clones trigger node ids when de-duplicating GitHub webhook matches to avoid partial moves.

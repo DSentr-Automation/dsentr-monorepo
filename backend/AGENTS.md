@@ -61,6 +61,7 @@ itly coordinated.
 - Update github backend build to push to a docker dev repo
 - Added compile-time embedded action manifests so new action nodes can be added via JSON without new executor code.
 - Fixed HTTP egress validation to only check manifest-defined destinations (node.data.http.url) and ignore payload data (params.url), preventing false rejections when actions process URLs as data.
+- Refreshed SQLx offline query cache to align provider trigger and webhook dedupe queries with the latest schema.
 
 ## Engine invariant
 

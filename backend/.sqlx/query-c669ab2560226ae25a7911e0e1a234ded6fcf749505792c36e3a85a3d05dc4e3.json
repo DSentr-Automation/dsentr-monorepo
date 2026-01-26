@@ -35,7 +35,7 @@
       {
         "ordinal": 4,
         "name": "trigger_node_id",
-        "type_info": "Uuid"
+        "type_info": "Text"
       },
       {
         "ordinal": 5,

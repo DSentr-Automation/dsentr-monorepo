@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            INSERT INTO provider_triggers (\n                workspace_id, provider, workflow_id, trigger_node_id, \n                event_type, installation_id, repository_id\n            )\n            VALUES ($1, $2::provider_trigger_provider, $3, $4, $5, $6, $7)\n            RETURNING \n                id, workspace_id, provider as \"provider: ProviderTriggerProvider\", workflow_id, trigger_node_id,\n                event_type, installation_id, repository_id, enabled,\n                created_at, updated_at\n            ",
+  "query": "\n            INSERT INTO provider_triggers (\n                workspace_id, provider, workflow_id, trigger_node_id, \n                event_type, installation_id, repository_id\n            )\n            VALUES ($1, $2::provider_trigger_provider, $3, $4, $5, $6, $7)\n            ON CONFLICT (workspace_id, provider, workflow_id, trigger_node_id, event_type)\n            DO UPDATE SET\n                installation_id = EXCLUDED.installation_id,\n                repository_id = EXCLUDED.repository_id,\n                enabled = true\n            RETURNING \n                id, workspace_id, provider as \"provider: ProviderTriggerProvider\", workflow_id, trigger_node_id,\n                event_type, installation_id, repository_id, enabled,\n                created_at, updated_at\n            ",
   "describe": {
     "columns": [
       {
@@ -35,7 +35,7 @@
       {
         "ordinal": 4,
         "name": "trigger_node_id",
-        "type_info": "Uuid"
+        "type_info": "Text"
       },
       {
         "ordinal": 5,
@@ -82,7 +82,7 @@
           }
         },
         "Uuid",
-        "Uuid",
+        "Text",
         "Text",
         "Text",
         "Text"
@@ -102,5 +102,5 @@
       false
     ]
   },
-  "hash": "69a5b3f8c1336e3df4dbe78c94bb2f0858d7c13439250bdd02ebd8f93673f83a"
+  "hash": "6374d62b689cbfbb0832812a228fb90d536184ed93b979a29391c356607302ee"
 }
