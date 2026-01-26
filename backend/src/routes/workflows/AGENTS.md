@@ -42,3 +42,5 @@
 - Workflow run snapshots now normalize egress allowlists to trimmed host entries before enqueueing.
 - Workflow route test configs now seed GitHub OAuth settings so Config stubs compile with the expanded provider set.
 - Workflow route test configs now seed GitHub App settings so GitHub App invariants are exercised in route fixtures.
+- Added a workflow helper that maps GitHub trigger nodes into provider event types with installation and repository identifiers for deterministic trigger syncing.
+- Tightened GitHub trigger mapping determinism with an explicit event allowlist, canonical event selection key, and surfaced mapping errors for activation handling.

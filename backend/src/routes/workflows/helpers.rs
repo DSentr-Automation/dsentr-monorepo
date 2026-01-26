@@ -106,6 +106,144 @@ pub(crate) fn extract_schedule_config(graph: &Value) -> Option<Value> {
     None
 }
 
+#[allow(dead_code)]
+const GITHUB_TRIGGER_PREFIX: &str = "github.";
+#[allow(dead_code)]
+const GITHUB_TRIGGER_EVENT_KEY: &str = "events";
+// Legacy aliases are retained for backward compatibility only.
+// New frontend code must use the canonical "events" key.
+#[allow(dead_code)]
+const GITHUB_TRIGGER_EVENT_KEY_ALIASES: [&str; 5] = [
+    "eventTypes",
+    "event_types",
+    "eventType",
+    "event_type",
+    "actions",
+];
+#[allow(dead_code)]
+const GITHUB_TRIGGER_ALLOWED_EVENTS: [&str; 5] = [
+    "issues",
+    "pull_request",
+    "push",
+    "release",
+    "workflow_run",
+];
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GitHubTriggerMapping {
+    pub trigger_node_id: String,
+    pub event_types: Vec<String>,
+    pub installation_id: String,
+    pub repository_id: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GitHubTriggerMappingError {
+    pub trigger_node_id: Option<String>,
+    pub code: &'static str,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GitHubTriggerMappingOutcome {
+    pub mappings: Vec<GitHubTriggerMapping>,
+    pub errors: Vec<GitHubTriggerMappingError>,
+}
+
+// GitHub trigger nodes must use triggerType values in the canonical frontend format
+// `github.<event>` (lowercase). Supported events: issues, pull_request, push, release, workflow_run.
+// TriggerType does not accept `github.<event>.<action>`; actions are selected via data.events.
+// Canonical event selection key is data.events; legacy aliases are read for backward compatibility.
+// Provider event_type strings are derived as:
+// - `github.<event>` when no action filters are selected
+// - `github.<event>.<action>` for each selected action (e.g., github.issues.opened)
+// Callers must treat missing installation_id, invalid triggerType, or invalid event selections
+// as activation errors; this helper returns errors for those cases.
+#[allow(dead_code)]
+pub(crate) fn collect_github_trigger_mappings(graph: &Value) -> GitHubTriggerMappingOutcome {
+    let mut mappings = Vec::new();
+    let mut errors = Vec::new();
+    let Some(nodes) = graph.get("nodes").and_then(|value| value.as_array()) else {
+        return GitHubTriggerMappingOutcome { mappings, errors };
+    };
+
+    for node in nodes {
+        let Some(node_type) = node.get("type").and_then(|value| value.as_str()) else {
+            continue;
+        };
+        if !node_type.eq_ignore_ascii_case("trigger") {
+            continue;
+        }
+        let Some(data) = node.get("data").and_then(|value| value.as_object()) else {
+            continue;
+        };
+        let Some(trigger_type) = normalize_trigger_type(data.get("triggerType")) else {
+            continue;
+        };
+        if !trigger_type.starts_with(GITHUB_TRIGGER_PREFIX) {
+            continue;
+        }
+
+        let trigger_node_id = read_string(node.get("id"));
+        if trigger_node_id.is_none() {
+            errors.push(GitHubTriggerMappingError {
+                trigger_node_id: None,
+                code: "missing_trigger_node_id",
+            });
+            continue;
+        }
+        let trigger_node_id = trigger_node_id.unwrap();
+
+        let Some(event_namespace) = parse_github_trigger_event(&trigger_type) else {
+            errors.push(GitHubTriggerMappingError {
+                trigger_node_id: Some(trigger_node_id),
+                code: "invalid_trigger_type",
+            });
+            continue;
+        };
+
+        let Some(installation_id) = read_string_or_number(data.get("installationId"))
+            .or_else(|| read_string_or_number(data.get("installation_id")))
+        else {
+            errors.push(GitHubTriggerMappingError {
+                trigger_node_id: Some(trigger_node_id),
+                code: "missing_installation_id",
+            });
+            continue;
+        };
+        let repository_id = read_string_or_number(data.get("repositoryId"))
+            .or_else(|| read_string_or_number(data.get("repository_id")));
+
+        let base_event_type = format!("{GITHUB_TRIGGER_PREFIX}{event_namespace}");
+        let selections = read_github_event_selections(data);
+        let event_types = match build_github_event_types(
+            &base_event_type,
+            event_namespace.as_str(),
+            selections.as_slice(),
+        ) {
+            Ok(types) => types,
+            Err(code) => {
+                errors.push(GitHubTriggerMappingError {
+                    trigger_node_id: Some(trigger_node_id),
+                    code,
+                });
+                continue;
+            }
+        };
+
+        mappings.push(GitHubTriggerMapping {
+            trigger_node_id,
+            event_types,
+            installation_id,
+            repository_id,
+        });
+    }
+
+    GitHubTriggerMappingOutcome { mappings, errors }
+}
+
 pub(crate) async fn sync_workflow_schedule(state: &AppState, workflow: &Workflow) {
     if let Err(error) = sync_workflow_schedule_inner(state, workflow).await {
         eprintln!(
@@ -201,6 +339,30 @@ async fn sync_workflow_schedule_inner(
 const DEFAULT_NOTION_POLL_INTERVAL_SECONDS: i64 = 300;
 const MIN_NOTION_POLL_INTERVAL_SECONDS: i64 = 30;
 const MAX_NOTION_POLL_INTERVAL_SECONDS: i64 = 3600;
+
+#[allow(dead_code)]
+fn normalize_trigger_type(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
+}
+
+#[allow(dead_code)]
+fn parse_github_trigger_event(trigger_type: &str) -> Option<String> {
+    let suffix = trigger_type.strip_prefix(GITHUB_TRIGGER_PREFIX)?;
+    let mut parts = suffix.split('.');
+    let event = parts.next()?.trim();
+    if event.is_empty() || parts.next().is_some() {
+        return None;
+    }
+    if GITHUB_TRIGGER_ALLOWED_EVENTS.contains(&event) {
+        Some(event.to_string())
+    } else {
+        None
+    }
+}
 
 fn is_notion_trigger_type(trigger_type: &str) -> bool {
     matches!(
@@ -301,12 +463,132 @@ fn read_page_size(value: Option<&Value>) -> Option<u32> {
     }
 }
 
+#[allow(dead_code)]
+fn read_string_or_number(value: Option<&Value>) -> Option<String> {
+    match value {
+        Some(Value::String(raw)) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        Some(Value::Number(num)) => num
+            .as_u64()
+            .map(|value| value.to_string())
+            .or_else(|| num.as_i64().map(|value| value.to_string())),
+        _ => None,
+    }
+}
+
 fn read_string(value: Option<&Value>) -> Option<String> {
     value
         .and_then(|v| v.as_str())
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
+}
+
+#[allow(dead_code)]
+fn push_string_list(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::String(raw) => {
+            let trimmed = raw.trim();
+            if !trimmed.is_empty() {
+                out.push(trimmed.to_string());
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                push_string_list(item, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[allow(dead_code)]
+fn read_github_event_selections(map: &serde_json::Map<String, Value>) -> Vec<String> {
+    let mut values = Vec::new();
+    if let Some(value) = map.get(GITHUB_TRIGGER_EVENT_KEY) {
+        push_string_list(value, &mut values);
+        return values;
+    }
+    for key in GITHUB_TRIGGER_EVENT_KEY_ALIASES {
+        if let Some(value) = map.get(key) {
+            push_string_list(value, &mut values);
+        }
+    }
+    values
+}
+
+#[allow(dead_code)]
+fn build_github_event_types(
+    base_event_type: &str,
+    event_namespace: &str,
+    selections: &[String],
+) -> Result<Vec<String>, &'static str> {
+    let mut event_types = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut has_invalid = false;
+    let mut has_values = false;
+    let event_prefix = format!("{event_namespace}.");
+
+    if selections.is_empty() {
+        event_types.push(base_event_type.to_string());
+        return Ok(event_types);
+    }
+
+    for selection in selections {
+        let normalized = selection.trim().to_ascii_lowercase();
+        if normalized.is_empty() {
+            continue;
+        }
+        has_values = true;
+        let event_type = if let Some(stripped) = normalized.strip_prefix(GITHUB_TRIGGER_PREFIX) {
+            if stripped.starts_with(event_prefix.as_str()) {
+                let action = stripped.trim_start_matches(event_prefix.as_str());
+                if action.is_empty() {
+                    has_invalid = true;
+                    continue;
+                }
+                format!("{base_event_type}.{action}")
+            } else {
+                has_invalid = true;
+                continue;
+            }
+        } else if let Some((prefix, action)) = normalized.split_once('.') {
+            if prefix != event_namespace || action.is_empty() {
+                has_invalid = true;
+                continue;
+            }
+            format!("{base_event_type}.{action}")
+        } else {
+            if normalized == event_namespace {
+                has_invalid = true;
+                continue;
+            }
+            format!("{base_event_type}.{normalized}")
+        };
+
+        if seen.insert(event_type.clone()) {
+            event_types.push(event_type);
+        }
+    }
+
+    if has_invalid {
+        return Err("invalid_event_selection");
+    }
+
+    if event_types.is_empty() {
+        if has_values {
+            return Err("invalid_event_selection");
+        }
+        event_types.push(base_event_type.to_string());
+    }
+
+    Ok(event_types)
 }
 
 pub(crate) fn plan_violation_response(violations: Vec<PlanViolation>) -> Response {
