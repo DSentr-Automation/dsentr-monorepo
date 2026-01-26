@@ -47,6 +47,11 @@ struct GitHubActivationPlan {
     mappings: Vec<GitHubTriggerMapping>,
 }
 
+struct GitHubConnectionContext {
+    access_token: String,
+    installation_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GitHubTriggerSignature {
     installation_id: String,
@@ -115,6 +120,29 @@ fn diff_github_trigger_nodes(
     removed.into_iter().collect()
 }
 
+fn extract_github_connection_installation_id(metadata: &Value) -> Option<String> {
+    let raw = metadata
+        .get("installation_id")
+        .or_else(|| metadata.get("installationId"))?;
+    let candidate = match raw {
+        Value::String(value) => value.trim().to_string(),
+        Value::Number(value) => {
+            if let Some(num) = value.as_u64() {
+                num.to_string()
+            } else if let Some(num) = value.as_i64() {
+                num.to_string()
+            } else {
+                return None;
+            }
+        }
+        _ => return None,
+    };
+    if candidate.is_empty() || !candidate.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    Some(candidate)
+}
+
 fn github_activation_error(message: &str, code: &str, errors: Vec<Value>) -> Response {
     (
         StatusCode::BAD_REQUEST,
@@ -166,8 +194,6 @@ async fn prepare_github_trigger_activation(
 
     let mut invalid_events = Vec::new();
     for mapping in &outcome.mappings {
-        // TODO: Cross-validate installation_id against the connected token once GitHub App
-        // installation-to-token linkage is available in persisted metadata.
         for event_type in &mapping.event_types {
             if !is_supported_github_event_type(event_type) {
                 invalid_events.push(json!({
@@ -186,20 +212,45 @@ async fn prepare_github_trigger_activation(
         ));
     }
 
-    let access_token =
-        resolve_github_access_token(app_state, owner_id, workspace_id).await?;
-    validate_github_repository_access(app_state, &access_token, &outcome.mappings).await?;
+    let connection =
+        resolve_github_connection_context(app_state, owner_id, workspace_id).await?;
+    let mut invalid_installations = Vec::new();
+    for mapping in &outcome.mappings {
+        let mapping_installation = mapping.installation_id.trim();
+        if mapping_installation != connection.installation_id {
+            invalid_installations.push(json!({
+                "code": "github_trigger_invalid_installation",
+                "trigger_node_id": mapping.trigger_node_id,
+                "installation_id": mapping.installation_id,
+                "connection_installation_id": connection.installation_id,
+            }));
+        }
+    }
+    if !invalid_installations.is_empty() {
+        return Err(github_activation_error(
+            "GitHub trigger activation failed. Installation does not match the selected connection.",
+            "github_trigger_invalid_installation",
+            invalid_installations,
+        ));
+    }
+
+    validate_github_repository_access(
+        app_state,
+        &connection.access_token,
+        &outcome.mappings,
+    )
+    .await?;
 
     Ok(Some(GitHubActivationPlan {
         mappings: outcome.mappings,
     }))
 }
 
-async fn resolve_github_access_token(
+async fn resolve_github_connection_context(
     app_state: &AppState,
     owner_id: Uuid,
     workspace_id: Option<Uuid>,
-) -> Result<String, Response> {
+) -> Result<GitHubConnectionContext, Response> {
     if let Some(workspace_id) = workspace_id {
         let mut connections = match app_state
             .workspace_connection_repo
@@ -224,13 +275,24 @@ async fn resolve_github_access_token(
         }
 
         connections.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        let mut missing_installation_id = false;
         for connection in connections {
             match app_state
                 .workspace_oauth
                 .ensure_valid_workspace_token(connection.id)
                 .await
             {
-                Ok(decrypted) => return Ok(decrypted.access_token),
+                Ok(decrypted) => {
+                    if let Some(installation_id) =
+                        extract_github_connection_installation_id(&connection.metadata)
+                    {
+                        return Ok(GitHubConnectionContext {
+                            access_token: decrypted.access_token,
+                            installation_id,
+                        });
+                    }
+                    missing_installation_id = true;
+                }
                 Err(WorkspaceOAuthError::OAuth(OAuthAccountError::Database(err)))
                 | Err(WorkspaceOAuthError::OAuth(OAuthAccountError::Encryption(err))) => {
                     eprintln!("Failed to decrypt GitHub workspace token: {:?}", err);
@@ -261,6 +323,17 @@ async fn resolve_github_access_token(
                     continue;
                 }
             }
+        }
+
+        if missing_installation_id {
+            return Err(github_activation_error(
+                "GitHub trigger activation failed. Connection is not linked to an installation.",
+                "github_trigger_installation_unbound",
+                vec![json!({
+                    "code": "github_trigger_installation_unbound",
+                    "workspace_id": workspace_id,
+                })],
+            ));
         }
 
         return Err(github_activation_error(
@@ -294,13 +367,24 @@ async fn resolve_github_access_token(
     }
 
     tokens.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    let mut missing_installation_id = false;
     for token in tokens {
         match app_state
             .oauth_accounts
             .ensure_valid_access_token_for_connection(owner_id, token.id)
             .await
         {
-            Ok(stored) => return Ok(stored.access_token),
+            Ok(stored) => {
+                if let Some(installation_id) =
+                    extract_github_connection_installation_id(&token.metadata)
+                {
+                    return Ok(GitHubConnectionContext {
+                        access_token: stored.access_token,
+                        installation_id,
+                    });
+                }
+                missing_installation_id = true;
+            }
             Err(OAuthAccountError::Database(err)) | Err(OAuthAccountError::Encryption(err)) => {
                 eprintln!("Failed to decrypt GitHub token: {:?}", err);
                 return Err(JsonResponse::server_error("Failed to validate GitHub connection")
@@ -313,6 +397,17 @@ async fn resolve_github_access_token(
             }
             Err(_) => continue,
         }
+    }
+
+    if missing_installation_id {
+        return Err(github_activation_error(
+            "GitHub trigger activation failed. Connection is not linked to an installation.",
+            "github_trigger_installation_unbound",
+            vec![json!({
+                "code": "github_trigger_installation_unbound",
+                "user_id": owner_id,
+            })],
+        ));
     }
 
     Err(github_activation_error(
@@ -361,7 +456,7 @@ async fn validate_github_repository_access(
         {
             Ok(resp) => resp,
             Err(err) => {
-                let code = "github_validation_unavailable";
+                let code = "github_trigger_validation_unavailable";
                 eprintln!("GitHub repository validation failed: {:?}", err);
                 return Err(github_activation_error(
                     "GitHub validation is temporarily unavailable. Try again.",
@@ -380,9 +475,9 @@ async fn validate_github_repository_access(
 
         let status = response.status();
         let code = if status == StatusCode::NOT_FOUND {
-            "github_repository_not_found"
+            "github_trigger_repo_not_found"
         } else if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-            "github_repository_access_denied"
+            "github_trigger_repo_access_denied"
         } else {
             "github_repository_check_failed"
         };

@@ -129,6 +129,11 @@ const GITHUB_TRIGGER_ALLOWED_EVENTS: [&str; 5] = [
     "workflow_run",
 ];
 
+// GitHub trigger config schema (workflow.data.nodes[].data):
+// - installation_id / installationId: required numeric identifier for the GitHub App installation
+// - repository_id / repositoryId: optional numeric identifier for repo-scoped triggers
+// - events: optional list of action strings (canonical key)
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GitHubTriggerMapping {
@@ -261,17 +266,28 @@ pub(crate) fn collect_github_trigger_mappings(graph: &Value) -> GitHubTriggerMap
             continue;
         };
 
-        let Some(installation_id) = read_string_or_number(data.get("installationId"))
-            .or_else(|| read_string_or_number(data.get("installation_id")))
-        else {
-            errors.push(GitHubTriggerMappingError {
-                trigger_node_id: Some(trigger_node_id),
-                code: "missing_installation_id",
-            });
-            continue;
+        let installation_id = match validate_github_installation_id(
+            data.get("installationId")
+                .or_else(|| data.get("installation_id")),
+            &trigger_node_id,
+        ) {
+            Ok(value) => value,
+            Err(err) => {
+                errors.push(err);
+                continue;
+            }
         };
-        let repository_id = read_string_or_number(data.get("repositoryId"))
-            .or_else(|| read_string_or_number(data.get("repository_id")));
+        let repository_id = match validate_github_repository_id(
+            data.get("repositoryId")
+                .or_else(|| data.get("repository_id")),
+            &trigger_node_id,
+        ) {
+            Ok(value) => value,
+            Err(err) => {
+                errors.push(err);
+                continue;
+            }
+        };
 
         let base_event_type = format!("{GITHUB_TRIGGER_PREFIX}{event_namespace}");
         let selections = read_github_event_selections(data);
@@ -404,6 +420,59 @@ fn normalize_trigger_type(value: Option<&Value>) -> Option<String> {
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
         .map(|value| value.to_ascii_lowercase())
+}
+
+fn is_numeric_identifier(value: &str) -> bool {
+    !value.is_empty() && value.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn validate_github_installation_id(
+    raw: Option<&Value>,
+    trigger_node_id: &str,
+) -> Result<String, GitHubTriggerMappingError> {
+    let Some(raw) = raw else {
+        return Err(GitHubTriggerMappingError {
+            trigger_node_id: Some(trigger_node_id.to_string()),
+            code: "missing_installation_id",
+        });
+    };
+    let Some(candidate) = read_string_or_number(Some(raw)) else {
+        return Err(GitHubTriggerMappingError {
+            trigger_node_id: Some(trigger_node_id.to_string()),
+            code: "invalid_installation_id_format",
+        });
+    };
+    let trimmed = candidate.trim();
+    if !is_numeric_identifier(trimmed) {
+        return Err(GitHubTriggerMappingError {
+            trigger_node_id: Some(trigger_node_id.to_string()),
+            code: "invalid_installation_id_format",
+        });
+    }
+    Ok(trimmed.to_string())
+}
+
+fn validate_github_repository_id(
+    raw: Option<&Value>,
+    trigger_node_id: &str,
+) -> Result<Option<String>, GitHubTriggerMappingError> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let Some(candidate) = read_string_or_number(Some(raw)) else {
+        return Err(GitHubTriggerMappingError {
+            trigger_node_id: Some(trigger_node_id.to_string()),
+            code: "invalid_repository_id_format",
+        });
+    };
+    let trimmed = candidate.trim();
+    if !is_numeric_identifier(trimmed) {
+        return Err(GitHubTriggerMappingError {
+            trigger_node_id: Some(trigger_node_id.to_string()),
+            code: "invalid_repository_id_format",
+        });
+    }
+    Ok(Some(trimmed.to_string()))
 }
 
 #[allow(dead_code)]
