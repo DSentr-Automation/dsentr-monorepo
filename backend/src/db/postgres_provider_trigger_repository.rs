@@ -25,6 +25,11 @@ impl ProviderTriggerRepository for PostgresProviderTriggerRepository {
                 event_type, installation_id, repository_id
             )
             VALUES ($1, $2::provider_trigger_provider, $3, $4, $5, $6, $7)
+            ON CONFLICT (workspace_id, provider, workflow_id, trigger_node_id, event_type)
+            DO UPDATE SET
+                installation_id = EXCLUDED.installation_id,
+                repository_id = EXCLUDED.repository_id,
+                enabled = true
             RETURNING 
                 id, workspace_id, provider as "provider: ProviderTriggerProvider", workflow_id, trigger_node_id,
                 event_type, installation_id, repository_id, enabled,

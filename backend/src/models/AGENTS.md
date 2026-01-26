@@ -42,3 +42,4 @@
 - Added `WebhookSubscription` model to mirror webhook_subscriptions rows for webhook trigger mappings.
 - Removed workflow-scoped webhook fields (`require_hmac`, `hmac_replay_window_sec`, `webhook_salt`) from `Workflow` now that ingress is source-based only.
 - Connected OAuth provider enum now includes GitHub so GitHub connections can be stored alongside existing providers.
+- Provider trigger models now store `trigger_node_id` as a string to support non-UUID workflow node identifiers.

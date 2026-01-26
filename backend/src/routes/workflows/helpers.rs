@@ -152,6 +152,63 @@ pub(crate) struct GitHubTriggerMappingOutcome {
     pub errors: Vec<GitHubTriggerMappingError>,
 }
 
+// Provider trigger activation boundary: only workflows that are explicitly active should register
+// provider triggers. Draft/paused/disabled workflows must not activate. Absence of an explicit
+// status flag is treated as active to preserve existing workflow behavior.
+#[allow(dead_code)]
+pub(crate) fn workflow_is_active(graph: &Value) -> bool {
+    let draft_flag = graph
+        .get("draft")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+        || graph
+            .get("isDraft")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+    if draft_flag {
+        return false;
+    }
+
+    if graph
+        .get("paused")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+    {
+        return false;
+    }
+
+    if graph
+        .get("enabled")
+        .and_then(|value| value.as_bool())
+        .map(|value| !value)
+        .unwrap_or(false)
+    {
+        return false;
+    }
+
+    if let Some(status) = graph.get("status").and_then(|value| value.as_str()) {
+        let normalized = status.trim().to_ascii_lowercase();
+        if matches!(normalized.as_str(), "draft" | "disabled" | "paused") {
+            return false;
+        }
+        if matches!(normalized.as_str(), "published" | "active" | "enabled") {
+            return true;
+        }
+    }
+
+    true
+}
+
+#[allow(dead_code)]
+pub(crate) fn is_supported_github_event_type(event_type: &str) -> bool {
+    let trimmed = event_type.trim().to_ascii_lowercase();
+    let Some(suffix) = trimmed.strip_prefix(GITHUB_TRIGGER_PREFIX) else {
+        return false;
+    };
+    let event = suffix.split('.').next().unwrap_or("").trim();
+    !event.is_empty() && GITHUB_TRIGGER_ALLOWED_EVENTS.contains(&event)
+}
+
 // GitHub trigger nodes must use triggerType values in the canonical frontend format
 // `github.<event>` (lowercase). Supported events: issues, pull_request, push, release, workflow_run.
 // TriggerType does not accept `github.<event>.<action>`; actions are selected via data.events.

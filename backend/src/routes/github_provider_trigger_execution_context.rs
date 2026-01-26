@@ -7,7 +7,7 @@ use crate::routes::github_provider_trigger_handoff::ProviderTriggerHandoff;
 #[allow(dead_code)]
 pub struct ProviderTriggerExecutionContext {
     pub workflow_id: Uuid,
-    pub trigger_node_id: Uuid,
+    pub trigger_node_id: String,
     pub workspace_id: Option<Uuid>,
     pub delivery_id: Option<String>,
     pub execution_identity: ProviderExecutionIdentity,

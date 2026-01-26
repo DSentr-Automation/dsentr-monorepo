@@ -4,7 +4,7 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct ProviderTriggerHandoff {
     pub workflow_id: Uuid,
-    pub trigger_node_id: Uuid,
+    pub trigger_node_id: String,
     pub delivery_id: Option<String>,
 }
 

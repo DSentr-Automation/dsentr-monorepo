@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
-use uuid::Uuid;
 
 use crate::engine::actions::registry::ActionRegistry;
 use crate::engine::{build_action_registry, execute_run};
@@ -32,7 +31,7 @@ impl GitHubProviderTriggerExecutor {
     fn prepare_trigger_snapshot(
         &self,
         workflow: &Workflow,
-        trigger_node_id: Uuid,
+        trigger_node_id: &str,
     ) -> serde_json::Value {
         let mut snapshot = workflow.data.clone();
 
@@ -41,7 +40,7 @@ impl GitHubProviderTriggerExecutor {
 
         // Set trigger context for webhook
         snapshot["_trigger_context"] = json!({
-            "trigger_node_id": trigger_node_id.to_string(),
+            "trigger_node_id": trigger_node_id,
             "trigger_type": "webhook",
             "source": "github"
         });
@@ -115,7 +114,7 @@ impl ProviderTriggerExecutor for GitHubProviderTriggerExecutor {
         };
 
         // Prepare snapshot with trigger context using helper function
-        let mut snapshot = self.prepare_trigger_snapshot(&workflow, context.trigger_node_id);
+        let mut snapshot = self.prepare_trigger_snapshot(&workflow, context.trigger_node_id.as_str());
 
         // Decrypt and hydrate secrets
         let (secret_store, _) = match decrypt_secret_store(

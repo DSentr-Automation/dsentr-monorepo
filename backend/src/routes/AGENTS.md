@@ -115,3 +115,4 @@
 - Provider GitHub webhook ingress now records delivery-id dedupe before JSON parsing so duplicate malformed payloads short-circuit cleanly.
 - Provider GitHub webhook ingress now uses the webhook-ingress dedupe repository with a fixed provider UUID key to enforce delivery-id idempotency without replay-window logic.
 - GitHub provider trigger planning now dedupes by `(workflow_id, trigger_node_id)` so multiple workflows sharing a trigger node id do not clobber each other.
+- GitHub provider trigger dispatch now treats `trigger_node_id` as an opaque string so non-UUID workflow node ids can activate provider runs.

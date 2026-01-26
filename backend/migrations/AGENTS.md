@@ -60,3 +60,4 @@
 - Added `webhook_deliveries` table with source/subscription/received-at indexes to track inbound webhook delivery attempts.
 - Added the GitHub OAuth provider value to the `oauth_connection_provider` enum so GitHub connections can be persisted.
 - Added `provider_webhook_dedupe` table to store provider delivery ids for idempotent webhook ingestion.
+- Changed `provider_triggers.trigger_node_id` to TEXT so provider triggers can store non-UUID workflow node ids from the frontend.

@@ -2,7 +2,7 @@ use crate::routes::github_provider_trigger_planner::ProviderTriggerExecutionPlan
 use uuid::Uuid;
 
 pub struct ProviderTriggerDispatch {
-    pub trigger_node_id: Uuid,
+    pub trigger_node_id: String,
     pub workflow_id: Uuid,
 }
 

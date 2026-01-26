@@ -1,12 +1,28 @@
 use super::{
     helpers::{
-        can_access_workflow_in_context, can_access_workspace_in_context, diff_user_nodes_only,
-        enforce_solo_workflow_limit, is_unique_violation, membership_roles_map,
-        plan_context_for_user, plan_violation_response, sync_workflow_schedule, PlanContext,
+        can_access_workflow_in_context, can_access_workspace_in_context,
+        collect_github_trigger_mappings, diff_user_nodes_only, enforce_solo_workflow_limit,
+        is_supported_github_event_type, is_unique_violation, membership_roles_map,
+        plan_context_for_user, plan_violation_response, sync_workflow_schedule,
+        workflow_is_active, GitHubTriggerMapping, GitHubTriggerMappingError, PlanContext,
     },
     prelude::*,
 };
-use crate::utils::change_history::log_workspace_history_event;
+use crate::{
+    db::{
+        postgres_oauth_token_repository::PostgresUserOAuthTokenRepository,
+        postgres_provider_trigger_repository::PostgresProviderTriggerRepository,
+    },
+    models::{
+        oauth_token::ConnectedOAuthProvider,
+        provider_trigger::{CreateProviderTrigger, ProviderTriggerProvider},
+    },
+    services::oauth::{
+        account_service::OAuthAccountError, workspace_service::WorkspaceOAuthError,
+    },
+    utils::change_history::log_workspace_history_event,
+};
+use tracing::info;
 
 #[derive(Default, Deserialize)]
 pub struct WorkflowContextQuery {
@@ -24,6 +40,374 @@ pub struct UpdateWorkflowPayload {
     pub workspace_id: Option<Uuid>,
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub updated_at: Option<OffsetDateTime>,
+}
+
+struct GitHubActivationPlan {
+    mappings: Vec<GitHubTriggerMapping>,
+}
+
+fn github_activation_error(message: &str, code: &str, errors: Vec<Value>) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "success": false,
+            "status": "error",
+            "message": message,
+            "code": code,
+            "errors": errors,
+        })),
+    )
+        .into_response()
+}
+
+fn github_activation_mapping_error(errors: Vec<GitHubTriggerMappingError>) -> Response {
+    let details: Vec<Value> = errors
+        .into_iter()
+        .map(|err| {
+            json!({
+                "code": err.code,
+                "trigger_node_id": err.trigger_node_id,
+            })
+        })
+        .collect();
+    github_activation_error(
+        "GitHub trigger activation failed. Fix the trigger configuration before publishing.",
+        "github_trigger_activation_failed",
+        details,
+    )
+}
+
+async fn prepare_github_trigger_activation(
+    app_state: &AppState,
+    owner_id: Uuid,
+    workspace_id: Option<Uuid>,
+    graph: &Value,
+) -> Result<Option<GitHubActivationPlan>, Response> {
+    if !workflow_is_active(graph) {
+        return Ok(None);
+    }
+
+    let outcome = collect_github_trigger_mappings(graph);
+    if outcome.mappings.is_empty() && outcome.errors.is_empty() {
+        return Ok(None);
+    }
+    if !outcome.errors.is_empty() {
+        return Err(github_activation_mapping_error(outcome.errors));
+    }
+
+    let mut invalid_events = Vec::new();
+    for mapping in &outcome.mappings {
+        // TODO: Cross-validate installation_id against the connected token once GitHub App
+        // installation-to-token linkage is available in persisted metadata.
+        for event_type in &mapping.event_types {
+            if !is_supported_github_event_type(event_type) {
+                invalid_events.push(json!({
+                    "code": "invalid_event_type",
+                    "trigger_node_id": mapping.trigger_node_id,
+                    "event_type": event_type,
+                }));
+            }
+        }
+    }
+    if !invalid_events.is_empty() {
+        return Err(github_activation_error(
+            "GitHub trigger activation failed. One or more events are not supported.",
+            "github_trigger_activation_failed",
+            invalid_events,
+        ));
+    }
+
+    let access_token =
+        resolve_github_access_token(app_state, owner_id, workspace_id).await?;
+    validate_github_repository_access(app_state, &access_token, &outcome.mappings).await?;
+
+    Ok(Some(GitHubActivationPlan {
+        mappings: outcome.mappings,
+    }))
+}
+
+async fn resolve_github_access_token(
+    app_state: &AppState,
+    owner_id: Uuid,
+    workspace_id: Option<Uuid>,
+) -> Result<String, Response> {
+    if let Some(workspace_id) = workspace_id {
+        let mut connections = match app_state
+            .workspace_connection_repo
+            .list_by_workspace_and_provider(workspace_id, ConnectedOAuthProvider::GitHub)
+            .await
+        {
+            Ok(records) => records,
+            Err(err) => {
+                eprintln!("Failed to load workspace GitHub connections: {:?}", err);
+                return Err(JsonResponse::server_error(
+                    "Failed to validate GitHub connection",
+                )
+                .into_response());
+            }
+        };
+        if connections.is_empty() {
+            return Err(github_activation_error(
+                "GitHub connection required for workspace workflows.",
+                "github_connection_missing",
+                vec![json!({ "code": "github_connection_missing", "workspace_id": workspace_id })],
+            ));
+        }
+
+        connections.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        for connection in connections {
+            match app_state
+                .workspace_oauth
+                .ensure_valid_workspace_token(connection.id)
+                .await
+            {
+                Ok(decrypted) => return Ok(decrypted.access_token),
+                Err(WorkspaceOAuthError::OAuth(OAuthAccountError::Database(err)))
+                | Err(WorkspaceOAuthError::OAuth(OAuthAccountError::Encryption(err))) => {
+                    eprintln!("Failed to decrypt GitHub workspace token: {:?}", err);
+                    return Err(JsonResponse::server_error(
+                        "Failed to validate GitHub connection",
+                    )
+                    .into_response());
+                }
+                Err(WorkspaceOAuthError::Database(err))
+                | Err(WorkspaceOAuthError::Encryption(err)) => {
+                    eprintln!("Failed to load GitHub workspace token: {:?}", err);
+                    return Err(JsonResponse::server_error(
+                        "Failed to validate GitHub connection",
+                    )
+                    .into_response());
+                }
+                Err(WorkspaceOAuthError::OAuth(OAuthAccountError::Http(err))) => {
+                    eprintln!("GitHub connection validation HTTP error: {:?}", err);
+                    return Err(JsonResponse::server_error(
+                        "Failed to validate GitHub connection",
+                    )
+                    .into_response());
+                }
+                Err(WorkspaceOAuthError::OAuth(_))
+                | Err(WorkspaceOAuthError::NotFound)
+                | Err(WorkspaceOAuthError::Forbidden)
+                | Err(WorkspaceOAuthError::SlackInstallRequired) => {
+                    continue;
+                }
+            }
+        }
+
+        return Err(github_activation_error(
+            "GitHub connection required for workspace workflows.",
+            "github_connection_invalid",
+            vec![json!({ "code": "github_connection_invalid", "workspace_id": workspace_id })],
+        ));
+    }
+
+    let user_repo = PostgresUserOAuthTokenRepository {
+        pool: (*app_state.db_pool).clone(),
+    };
+    let mut tokens = match user_repo
+        .list_by_user_and_provider(owner_id, ConnectedOAuthProvider::GitHub)
+        .await
+    {
+        Ok(records) => records,
+        Err(err) => {
+            eprintln!("Failed to load user GitHub tokens: {:?}", err);
+            return Err(JsonResponse::server_error("Failed to validate GitHub connection")
+                .into_response());
+        }
+    };
+
+    if tokens.is_empty() {
+        return Err(github_activation_error(
+            "GitHub connection required for personal workflows.",
+            "github_connection_missing",
+            vec![json!({ "code": "github_connection_missing", "user_id": owner_id })],
+        ));
+    }
+
+    tokens.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    for token in tokens {
+        match app_state
+            .oauth_accounts
+            .ensure_valid_access_token_for_connection(owner_id, token.id)
+            .await
+        {
+            Ok(stored) => return Ok(stored.access_token),
+            Err(OAuthAccountError::Database(err)) | Err(OAuthAccountError::Encryption(err)) => {
+                eprintln!("Failed to decrypt GitHub token: {:?}", err);
+                return Err(JsonResponse::server_error("Failed to validate GitHub connection")
+                    .into_response());
+            }
+            Err(OAuthAccountError::Http(err)) => {
+                eprintln!("GitHub connection validation HTTP error: {:?}", err);
+                return Err(JsonResponse::server_error("Failed to validate GitHub connection")
+                    .into_response());
+            }
+            Err(_) => continue,
+        }
+    }
+
+    Err(github_activation_error(
+        "GitHub connection required for personal workflows.",
+        "github_connection_invalid",
+        vec![json!({ "code": "github_connection_invalid", "user_id": owner_id })],
+    ))
+}
+
+async fn validate_github_repository_access(
+    app_state: &AppState,
+    access_token: &str,
+    mappings: &[GitHubTriggerMapping],
+) -> Result<(), Response> {
+    const GITHUB_VALIDATION_TIMEOUT: Duration = Duration::from_secs(8);
+    let mut checked = HashSet::new();
+    for mapping in mappings {
+        let Some(repository_id) = mapping.repository_id.as_deref() else {
+            continue;
+        };
+        let trimmed = repository_id.trim();
+        if trimmed.is_empty() {
+            return Err(github_activation_error(
+                "GitHub trigger activation failed. Repository id is missing.",
+                "github_repository_missing",
+                vec![json!({
+                    "code": "github_repository_missing",
+                    "trigger_node_id": mapping.trigger_node_id,
+                })],
+            ));
+        }
+        if !checked.insert(trimmed.to_string()) {
+            continue;
+        }
+
+        let url = format!("https://api.github.com/repositories/{trimmed}");
+        let response = match app_state
+            .http_client
+            .get(url)
+            .bearer_auth(access_token)
+            .header("Accept", "application/vnd.github+json")
+            .header("User-Agent", "dsentr")
+            .timeout(GITHUB_VALIDATION_TIMEOUT)
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(err) => {
+                let code = "github_validation_unavailable";
+                eprintln!("GitHub repository validation failed: {:?}", err);
+                return Err(github_activation_error(
+                    "GitHub validation is temporarily unavailable. Try again.",
+                    code,
+                    vec![json!({
+                        "code": code,
+                        "repository_id": trimmed,
+                    })],
+                ));
+            }
+        };
+
+        if response.status().is_success() {
+            continue;
+        }
+
+        let status = response.status();
+        let code = if status == StatusCode::NOT_FOUND {
+            "github_repository_not_found"
+        } else if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+            "github_repository_access_denied"
+        } else {
+            "github_repository_check_failed"
+        };
+
+        return Err(github_activation_error(
+            "GitHub trigger activation failed. Repository access could not be verified.",
+            code,
+            vec![json!({
+                "code": code,
+                "repository_id": trimmed,
+                "status": status.as_u16(),
+            })],
+        ));
+    }
+
+    Ok(())
+}
+
+async fn insert_github_provider_triggers(
+    app_state: &AppState,
+    workflow: &Workflow,
+    plan: Option<GitHubActivationPlan>,
+) -> Result<(), Response> {
+    let Some(plan) = plan else {
+        return Ok(());
+    };
+    if plan.mappings.is_empty() {
+        return Ok(());
+    }
+
+    let trigger_repo = PostgresProviderTriggerRepository {
+        pool: (*app_state.db_pool).clone(),
+    };
+
+    for mapping in plan.mappings {
+        let trigger_node_id = mapping.trigger_node_id.trim().to_string();
+        if trigger_node_id.is_empty() {
+            return Err(github_activation_error(
+                "GitHub trigger activation failed. Trigger node id is invalid.",
+                "invalid_trigger_node_id",
+                vec![json!({
+                    "code": "invalid_trigger_node_id",
+                    "trigger_node_id": mapping.trigger_node_id,
+                })],
+            ));
+        }
+
+        for event_type in mapping.event_types {
+            if !is_supported_github_event_type(&event_type) {
+                return Err(github_activation_error(
+                    "GitHub trigger activation failed. Event type is not supported.",
+                    "invalid_event_type",
+                    vec![json!({
+                        "code": "invalid_event_type",
+                        "trigger_node_id": trigger_node_id,
+                        "event_type": event_type,
+                    })],
+                ));
+            }
+
+            let created = trigger_repo
+                .create_provider_trigger(CreateProviderTrigger {
+                    workspace_id: workflow.workspace_id,
+                    provider: ProviderTriggerProvider::Github,
+                    workflow_id: workflow.id,
+                    trigger_node_id: trigger_node_id.clone(),
+                    event_type: event_type.clone(),
+                    installation_id: Some(mapping.installation_id.clone()),
+                    repository_id: mapping.repository_id.clone(),
+                })
+                .await;
+
+            match created {
+                Ok(trigger) => {
+                    info!(
+                        workflow_id = %workflow.id,
+                        trigger_node_id = %trigger_node_id,
+                        event_type = %event_type,
+                        repository_id = ?trigger.repository_id,
+                        "provider trigger upserted"
+                    );
+                }
+                Err(err) => {
+                    eprintln!("Failed to upsert provider trigger: {:?}", err);
+                    return Err(JsonResponse::server_error(
+                        "Failed to activate GitHub triggers",
+                    )
+                    .into_response());
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 pub async fn create_workflow(
@@ -118,6 +502,12 @@ pub async fn create_workflow(
         }
     }
 
+    let github_activation_plan =
+        match prepare_github_trigger_activation(&app_state, user_id, workspace_id, &data).await {
+            Ok(plan) => plan,
+            Err(response) => return response,
+        };
+
     let result = app_state
         .workflow_repo
         .create_workflow(user_id, workspace_id, &name, description.as_deref(), data)
@@ -125,6 +515,11 @@ pub async fn create_workflow(
 
     match result {
         Ok(workflow) => {
+            if let Err(response) =
+                insert_github_provider_triggers(&app_state, &workflow, github_activation_plan).await
+            {
+                return response;
+            }
             sync_workflow_schedule(&app_state, &workflow).await;
             sync_secrets_from_workflow(&app_state, user_id, &workflow.data).await;
             (
@@ -488,6 +883,17 @@ pub async fn update_workflow(
 
     let owner_id = existing.user_id;
     let before = existing.clone();
+    let github_activation_plan = match prepare_github_trigger_activation(
+        &app_state,
+        owner_id,
+        existing.workspace_id,
+        &data,
+    )
+    .await
+    {
+        Ok(plan) => plan,
+        Err(response) => return response,
+    };
 
     match app_state
         .workflow_repo
@@ -511,6 +917,11 @@ pub async fn update_workflow(
                     };
                     return plan_violation_response(vec![violation]);
                 }
+            }
+            if let Err(response) =
+                insert_github_provider_triggers(&app_state, &workflow, github_activation_plan).await
+            {
+                return response;
             }
             sync_workflow_schedule(&app_state, &workflow).await;
             let diffs = diff_user_nodes_only(&before.data, &workflow.data);

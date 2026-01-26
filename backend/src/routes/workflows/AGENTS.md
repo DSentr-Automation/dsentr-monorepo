@@ -44,3 +44,5 @@
 - Workflow route test configs now seed GitHub App settings so GitHub App invariants are exercised in route fixtures.
 - Added a workflow helper that maps GitHub trigger nodes into provider event types with installation and repository identifiers for deterministic trigger syncing.
 - Tightened GitHub trigger mapping determinism with an explicit event allowlist, canonical event selection key, and surfaced mapping errors for activation handling.
+- Workflow create/update now validates GitHub trigger activation (connections, repository access, event allowlist) and upserts provider triggers when publishing non-draft graphs.
+- GitHub trigger activation now guards on explicit workflow active state and treats trigger node ids as opaque strings for non-UUID graphs.

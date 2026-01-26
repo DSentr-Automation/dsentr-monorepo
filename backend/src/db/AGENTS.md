@@ -67,3 +67,5 @@
 - Marked `find_webhook_source_by_name` as allowed dead code so the legacy GitHub webhook lookup stays available without being wired in the new provider ingress.
 - Marked the provider webhook dedupe repository as allowed dead code while the provider ingress uses the shared webhook-ingress dedupe table.
 - Added a workflow repository helper for unmetered run creation so provider executions can bypass quota-gated paths explicitly.
+- Provider trigger inserts now upsert on the workflow/node/event unique key so re-activations refresh metadata without duplicating rows.
+- Provider trigger repositories now store trigger node ids as TEXT to match non-UUID frontend node identifiers.
