@@ -7,17 +7,20 @@ use axum::{
 };
 use hmac::{Hmac, Mac};
 use serde_json::{json, Value};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use std::env;
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
 use tracing::{error, info, warn, Span};
+use uuid::Uuid;
 
 use crate::db::postgres_provider_trigger_repository::PostgresProviderTriggerRepository;
-use crate::db::postgres_provider_webhook_dedupe_repository::PostgresProviderWebhookDedupeRepository;
+use crate::db::postgres_webhook_ingress_dedupe_repository::PostgresWebhookIngressDedupeRepository;
 use crate::db::provider_trigger_repository::ProviderTriggerRepository;
-use crate::db::provider_webhook_dedupe_repository::ProviderWebhookDedupeRepository;
+use crate::db::webhook_ingress_dedupe_repository::{
+    WebhookIngressDedupeKey, WebhookIngressDedupeRepository,
+};
 use crate::responses::JsonResponse;
 use crate::routes::github_provider_trigger_dispatcher::build_dispatch_list;
 use crate::routes::github_provider_trigger_engine_bridge::ProviderTriggerEngineBridge;
@@ -33,6 +36,7 @@ const GITHUB_DELIVERY_HEADER: &str = "X-GitHub-Delivery";
 const GITHUB_SIGNATURE_PREFIX: &str = "sha256=";
 const GITHUB_APP_WEBHOOK_SECRET_ENV: &str = "GITHUB_APP_WEBHOOK_SECRET";
 const PROVIDER_NAME: &str = "github";
+const GITHUB_PROVIDER_UUID: Uuid = Uuid::from_u128(0x5d1f3c1e9f4c4d1e8b2f6bfb1bdb7b4a);
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -45,7 +49,7 @@ pub async fn github_provider_webhook_ingress(
         Arc::new(PostgresProviderTriggerRepository {
             pool: (*app_state.db_pool).clone(),
         });
-    let dedupe_repo = PostgresProviderWebhookDedupeRepository {
+    let dedupe_repo = PostgresWebhookIngressDedupeRepository {
         pool: (*app_state.db_pool).clone(),
     };
 
@@ -55,7 +59,6 @@ pub async fn github_provider_webhook_ingress(
         &dedupe_repo,
         &headers,
         body.as_ref(),
-        OffsetDateTime::now_utc(),
     )
     .await
 }
@@ -63,10 +66,9 @@ pub async fn github_provider_webhook_ingress(
 pub(crate) async fn handle_github_provider_webhook_ingress(
     app_state: &AppState,
     trigger_repo: Arc<dyn ProviderTriggerRepository>,
-    dedupe_repo: &dyn ProviderWebhookDedupeRepository,
+    dedupe_repo: &dyn WebhookIngressDedupeRepository,
     headers: &HeaderMap,
     body: &[u8],
-    now: OffsetDateTime,
 ) -> Response {
     let span = tracing::info_span!(
         "provider_webhook_ingress",
@@ -107,26 +109,66 @@ pub(crate) async fn handle_github_provider_webhook_ingress(
         return (StatusCode::OK, Json(json!({}))).into_response();
     }
 
-    if let Some(delivery_id) = github_delivery.as_deref() {
-        match dedupe_repo
-            .insert_delivery(PROVIDER_NAME, delivery_id, now)
-            .await
-        {
-            Ok(true) => {}
-            Ok(false) => {
-                Span::current().record("event_type", tracing::field::display(&base_event_type));
-                Span::current().record("trigger_count", 0);
-                Span::current().record("run_count", 0);
-                info!(delivery_id = %delivery_id, "duplicate github delivery id");
-                return accepted_response();
-            }
-            Err(err) => {
-                error!(?err, "failed to record github delivery id");
-                return JsonResponse::server_error("Failed to record delivery id").into_response();
-            }
+    let Some(delivery_id) = github_delivery.as_deref() else {
+        warn!("Missing X-GitHub-Delivery header, skipping idempotency");
+        return handle_github_provider_event(
+            app_state,
+            trigger_repo,
+            headers,
+            body,
+            github_event,
+            github_delivery,
+            base_event_type.as_str(),
+        )
+        .await;
+    };
+
+    // The unique constraint includes source_id + event_type + payload_sha256 + signature + timestamp_floor,
+    // so deriving every field from the delivery id guarantees identical deliveries collide deterministically.
+    let dedupe_key = WebhookIngressDedupeKey {
+        source_id: GITHUB_PROVIDER_UUID,
+        event_type: format!("github:{delivery_id}"),
+        payload_sha256: Sha256::digest(delivery_id.as_bytes()).to_vec(),
+        signature: delivery_id.to_string(),
+        timestamp_floor: OffsetDateTime::UNIX_EPOCH,
+    };
+
+    match dedupe_repo.insert_dedupe_key(&dedupe_key).await {
+        Ok(true) => {}
+        Ok(false) => {
+            Span::current().record("event_type", tracing::field::display(&base_event_type));
+            Span::current().record("trigger_count", 0);
+            Span::current().record("run_count", 0);
+            info!(delivery_id = %delivery_id, "duplicate github delivery id");
+            return accepted_response();
+        }
+        Err(err) => {
+            error!(?err, "failed to record github delivery id");
+            return JsonResponse::server_error("Failed to record delivery id").into_response();
         }
     }
 
+    handle_github_provider_event(
+        app_state,
+        trigger_repo,
+        headers,
+        body,
+        github_event,
+        github_delivery,
+        base_event_type.as_str(),
+    )
+    .await
+}
+
+async fn handle_github_provider_event(
+    app_state: &AppState,
+    trigger_repo: Arc<dyn ProviderTriggerRepository>,
+    _headers: &HeaderMap,
+    body: &[u8],
+    github_event: &str,
+    github_delivery: Option<String>,
+    base_event_type: &str,
+) -> Response {
     let payload: Value = match serde_json::from_slice(body) {
         Ok(value) => value,
         Err(err) => {
@@ -142,7 +184,7 @@ pub(crate) async fn handle_github_provider_webhook_ingress(
         .filter(|value| !value.is_empty());
     let event_type = match action {
         Some(action) => format!("github.{}.{}", github_event, action),
-        None => format!("github.{}", github_event),
+        None => base_event_type.to_string(),
     };
 
     Span::current().record("event_type", tracing::field::display(&event_type));
@@ -310,7 +352,6 @@ mod tests {
     use reqwest::Client;
     use std::collections::HashSet;
     use std::sync::Mutex;
-    use time::OffsetDateTime;
     use uuid::Uuid;
 
     use crate::config::{
@@ -321,7 +362,9 @@ mod tests {
     use crate::db::mock_db::{MockDb, NoopWorkflowRepository};
     use crate::db::mock_stripe_event_log_repository::MockStripeEventLogRepository;
     use crate::db::provider_trigger_repository::ProviderTriggerRepository;
-    use crate::db::provider_webhook_dedupe_repository::ProviderWebhookDedupeRepository;
+    use crate::db::webhook_ingress_dedupe_repository::{
+        WebhookIngressDedupeKey, WebhookIngressDedupeRepository,
+    };
     use crate::db::workspace_connection_repository::NoopWorkspaceConnectionRepository;
     use crate::models::provider_trigger::{ProviderTrigger, ProviderTriggerProvider};
     use crate::services::oauth::account_service::OAuthAccountService;
@@ -404,20 +447,28 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct StubProviderWebhookDedupeRepo {
-        deliveries: Mutex<HashSet<(String, String)>>,
+    struct StubWebhookIngressDedupeRepo {
+        keys: Mutex<HashSet<(Uuid, String, Vec<u8>, String, i64)>>,
     }
 
     #[async_trait]
-    impl ProviderWebhookDedupeRepository for StubProviderWebhookDedupeRepo {
-        async fn insert_delivery(
+    impl WebhookIngressDedupeRepository for StubWebhookIngressDedupeRepo {
+        async fn insert_dedupe_key(
             &self,
-            provider: &str,
-            delivery_id: &str,
-            _received_at: OffsetDateTime,
+            key: &WebhookIngressDedupeKey,
         ) -> Result<bool, sqlx::Error> {
-            let mut guard = self.deliveries.lock().unwrap();
-            Ok(guard.insert((provider.to_string(), delivery_id.to_string())))
+            let mut guard = self.keys.lock().unwrap();
+            Ok(guard.insert((
+                key.source_id,
+                key.event_type.clone(),
+                key.payload_sha256.clone(),
+                key.signature.clone(),
+                key.timestamp_floor.unix_timestamp(),
+            )))
+        }
+
+        async fn purge_old_dedupe_entries(&self) -> Result<u64, sqlx::Error> {
+            Ok(0)
         }
     }
 
@@ -524,10 +575,6 @@ mod tests {
         compute_github_signature(secret, body).expect("signature")
     }
 
-    fn test_now() -> OffsetDateTime {
-        OffsetDateTime::from_unix_timestamp(1_700_000_000).expect("timestamp")
-    }
-
     #[tokio::test]
     async fn github_provider_webhook_missing_event_header_returns_bad_request() {
         env::set_var(GITHUB_APP_WEBHOOK_SECRET_ENV, "secret");
@@ -543,10 +590,9 @@ mod tests {
         let response = handle_github_provider_webhook_ingress(
             &app_state,
             Arc::new(StubProviderTriggerRepo::default()),
-            &StubProviderWebhookDedupeRepo::default(),
+            &StubWebhookIngressDedupeRepo::default(),
             &headers,
             body,
-            test_now(),
         )
         .await;
 
@@ -564,10 +610,9 @@ mod tests {
         let response = handle_github_provider_webhook_ingress(
             &app_state,
             Arc::new(StubProviderTriggerRepo::default()),
-            &StubProviderWebhookDedupeRepo::default(),
+            &StubWebhookIngressDedupeRepo::default(),
             &headers,
             body,
-            test_now(),
         )
         .await;
 
@@ -590,10 +635,9 @@ mod tests {
         let response = handle_github_provider_webhook_ingress(
             &app_state,
             Arc::new(StubProviderTriggerRepo::default()),
-            &StubProviderWebhookDedupeRepo::default(),
+            &StubWebhookIngressDedupeRepo::default(),
             &headers,
             body,
-            test_now(),
         )
         .await;
 
@@ -616,10 +660,9 @@ mod tests {
         let response = handle_github_provider_webhook_ingress(
             &app_state,
             Arc::new(StubProviderTriggerRepo::default()),
-            &StubProviderWebhookDedupeRepo::default(),
+            &StubWebhookIngressDedupeRepo::default(),
             &headers,
             body,
-            test_now(),
         )
         .await;
 
@@ -646,10 +689,9 @@ mod tests {
         let response = handle_github_provider_webhook_ingress(
             &app_state,
             repo.clone(),
-            &StubProviderWebhookDedupeRepo::default(),
+            &StubWebhookIngressDedupeRepo::default(),
             &headers,
             body,
-            test_now(),
         )
         .await;
 
@@ -676,10 +718,9 @@ mod tests {
         let response = handle_github_provider_webhook_ingress(
             &app_state,
             Arc::new(StubProviderTriggerRepo::default()),
-            &StubProviderWebhookDedupeRepo::default(),
+            &StubWebhookIngressDedupeRepo::default(),
             &headers,
             body,
-            test_now(),
         )
         .await;
 
@@ -701,16 +742,13 @@ mod tests {
         headers.insert(GITHUB_DELIVERY_HEADER, "delivery-1".parse().unwrap());
 
         let repo = Arc::new(StubProviderTriggerRepo::default());
-        let dedupe_repo = StubProviderWebhookDedupeRepo::default();
-        let now = test_now();
-
+        let dedupe_repo = StubWebhookIngressDedupeRepo::default();
         let response = handle_github_provider_webhook_ingress(
             &app_state,
             repo.clone(),
             &dedupe_repo,
             &headers,
             body,
-            now,
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -727,7 +765,6 @@ mod tests {
             &dedupe_repo,
             &headers,
             invalid_body,
-            now,
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);

@@ -4,6 +4,7 @@ use time::OffsetDateTime;
 
 use crate::db::provider_webhook_dedupe_repository::ProviderWebhookDedupeRepository;
 
+#[allow(dead_code)]
 pub struct PostgresProviderWebhookDedupeRepository {
     pub pool: PgPool,
 }
