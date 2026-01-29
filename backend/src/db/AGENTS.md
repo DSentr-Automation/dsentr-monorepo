@@ -70,3 +70,4 @@
 - Provider trigger inserts now upsert on the workflow/node/event unique key so re-activations refresh metadata without duplicating rows.
 - Provider trigger repositories now store trigger node ids as TEXT to match non-UUID frontend node identifiers.
 - Provider trigger repositories now expose delete-by-workflow and delete-by-node helpers so workflow updates can remove obsolete provider triggers.
+- Workspace connection repositories now expose a metadata update helper (Postgres + test doubles) so services can mark GitHub installations disabled without deleting connections.

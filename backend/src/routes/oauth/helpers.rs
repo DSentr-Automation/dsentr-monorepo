@@ -37,6 +37,8 @@ pub struct CallbackQuery {
     pub(crate) state: Option<String>,
     pub(crate) error: Option<String>,
     pub(crate) error_description: Option<String>,
+    #[serde(default, alias = "installation_id", alias = "installationId")]
+    pub(crate) installation_id: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -200,7 +202,7 @@ pub(crate) async fn handle_callback(
         Err(_) => return redirect_with_error(&state.config, integration_id, "Invalid user"),
     };
 
-    let tokens = match state
+    let mut tokens = match state
         .oauth_accounts
         .exchange_authorization_code(provider, &code)
         .await
@@ -216,6 +218,13 @@ pub(crate) async fn handle_callback(
             return (jar, response).into_response();
         }
     };
+
+    if matches!(provider, ConnectedOAuthProvider::GitHub) {
+        tokens.installation_id = query
+            .installation_id
+            .as_deref()
+            .and_then(normalize_github_installation_id);
+    }
 
     if let Err(err) = state
         .oauth_accounts
@@ -249,6 +258,18 @@ pub(crate) fn parse_slack_state(value: &str) -> Option<Uuid> {
         return None;
     }
     Uuid::parse_str(workspace).ok()
+}
+
+fn normalize_github_installation_id(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.chars().all(|ch| ch.is_ascii_digit()) {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
 }
 
 pub(crate) fn build_state_cookie(name: &str, value: &str) -> Cookie<'static> {

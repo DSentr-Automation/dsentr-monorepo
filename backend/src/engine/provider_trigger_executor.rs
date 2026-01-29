@@ -1,13 +1,19 @@
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::sync::Arc;
+use uuid::Uuid;
 
+use crate::db::postgres_oauth_token_repository::PostgresUserOAuthTokenRepository;
 use crate::engine::actions::registry::ActionRegistry;
 use crate::engine::{build_action_registry, execute_run};
+use crate::models::oauth_token::ConnectedOAuthProvider;
 use crate::models::workflow::Workflow;
 use crate::routes::github_provider_trigger_engine_bridge::ProviderTriggerExecutor;
 use crate::routes::github_provider_trigger_execution_context::ProviderTriggerExecutionContext;
 use crate::routes::options::secrets::decrypt_secret_store;
+use crate::services::oauth::account_service::{
+    installation_id_from_metadata, installation_is_disabled,
+};
 use crate::state::AppState;
 use crate::utils::egress_allowlist::normalize_egress_allowlist;
 use crate::utils::secrets::hydrate_secrets_into_snapshot;
@@ -17,6 +23,12 @@ use crate::utils::workflow_connection_metadata;
 pub struct GitHubProviderTriggerExecutor {
     state: AppState,
     registry: Arc<ActionRegistry>,
+}
+
+struct DisabledInstallationContext {
+    installation_id: String,
+    connection_id: Option<Uuid>,
+    token_id: Option<Uuid>,
 }
 
 impl GitHubProviderTriggerExecutor {
@@ -73,6 +85,111 @@ impl GitHubProviderTriggerExecutor {
 
         snapshot
     }
+
+    fn extract_trigger_installation_id(
+        &self,
+        workflow: &Workflow,
+        trigger_node_id: &str,
+    ) -> Option<String> {
+        let nodes = workflow
+            .data
+            .get("nodes")
+            .and_then(|value| value.as_array())?;
+        for node in nodes {
+            let node_id = node.get("id").and_then(|value| value.as_str())?;
+            if node_id != trigger_node_id {
+                continue;
+            }
+            let data = node.get("data").and_then(|value| value.as_object())?;
+            let raw = data
+                .get("installationId")
+                .or_else(|| data.get("installation_id"))?;
+            let candidate = match raw {
+                Value::String(value) => value.trim().to_string(),
+                Value::Number(value) => {
+                    if let Some(num) = value.as_u64() {
+                        num.to_string()
+                    } else if let Some(num) = value.as_i64() {
+                        num.to_string()
+                    } else {
+                        return None;
+                    }
+                }
+                _ => return None,
+            };
+            if candidate.is_empty() || !candidate.chars().all(|ch| ch.is_ascii_digit()) {
+                return None;
+            }
+            return Some(candidate);
+        }
+        None
+    }
+
+    async fn disabled_installation_context(
+        &self,
+        workflow: &Workflow,
+        trigger_node_id: &str,
+    ) -> Option<DisabledInstallationContext> {
+        let installation_id = self.extract_trigger_installation_id(workflow, trigger_node_id)?;
+
+        if let Some(workspace_id) = workflow.workspace_id {
+            let mut connections = match self
+                .state
+                .workspace_connection_repo
+                .list_by_workspace_and_provider(workspace_id, ConnectedOAuthProvider::GitHub)
+                .await
+            {
+                Ok(list) => list,
+                Err(_) => return None,
+            };
+            connections.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+            for connection in connections {
+                if installation_id_from_metadata(&connection.metadata).as_deref()
+                    != Some(installation_id.as_str())
+                {
+                    continue;
+                }
+                if installation_is_disabled(&connection.metadata) {
+                    return Some(DisabledInstallationContext {
+                        installation_id,
+                        connection_id: Some(connection.id),
+                        token_id: connection.user_oauth_token_id,
+                    });
+                }
+                return None;
+            }
+            return None;
+        }
+
+        let user_repo = PostgresUserOAuthTokenRepository {
+            pool: (*self.state.db_pool).clone(),
+        };
+        let mut tokens = match user_repo
+            .list_by_user_and_provider(workflow.user_id, ConnectedOAuthProvider::GitHub)
+            .await
+        {
+            Ok(list) => list,
+            Err(_) => return None,
+        };
+        tokens.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        for token in tokens {
+            if installation_id_from_metadata(&token.metadata).as_deref()
+                != Some(installation_id.as_str())
+            {
+                continue;
+            }
+            if installation_is_disabled(&token.metadata) {
+                return Some(DisabledInstallationContext {
+                    installation_id,
+                    connection_id: None,
+                    token_id: Some(token.id),
+                });
+            }
+            return None;
+        }
+
+        None
+    }
 }
 
 #[async_trait]
@@ -103,6 +220,22 @@ impl ProviderTriggerExecutor for GitHubProviderTriggerExecutor {
                 return;
             }
         };
+
+        if let Some(disabled) = self
+            .disabled_installation_context(&workflow, context.trigger_node_id.as_str())
+            .await
+        {
+            tracing::warn!(
+                workflow_id = %workflow.id,
+                trigger_node_id = %context.trigger_node_id,
+                workspace_id = ?workflow.workspace_id,
+                installation_id = %disabled.installation_id,
+                connection_id = ?disabled.connection_id,
+                token_id = ?disabled.token_id,
+                "GitHub provider trigger skipped due to disabled installation"
+            );
+            return;
+        }
 
         // Prepare user settings for secret hydration
         let settings = match self.state.db.get_user_settings(workflow.user_id).await {

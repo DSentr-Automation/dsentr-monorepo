@@ -8,6 +8,9 @@ use uuid::Uuid;
 
 use crate::responses::JsonResponse;
 use crate::routes::auth::session::AuthSession;
+use crate::services::oauth::account_service::{
+    installation_disabled_reason, installation_id_from_metadata, installation_is_disabled,
+};
 use crate::state::AppState;
 use crate::utils::plan_limits::NormalizedPlanTier;
 
@@ -21,6 +24,8 @@ pub struct ProviderWebhooksQuery {
 struct ProviderWebhookMetadata {
     provider: &'static str,
     enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    disabled_reason: Option<String>,
     webhook_endpoint: &'static str,
     delivery_deduplication: bool,
     trigger_source: &'static str,
@@ -75,9 +80,45 @@ pub async fn list_provider_webhooks(
         .into_response();
     }
 
+    let connections = match app_state
+        .workspace_connection_repo
+        .list_by_workspace_and_provider(
+            workspace_id,
+            crate::models::oauth_token::ConnectedOAuthProvider::GitHub,
+        )
+        .await
+    {
+        Ok(records) => records,
+        Err(err) => {
+            tracing::error!(?err, %workspace_id, "failed to load workspace GitHub connections");
+            return JsonResponse::server_error("Failed to load provider webhooks").into_response();
+        }
+    };
+
+    // Enabled is derived lazily from GitHub connection metadata; we only flip it off when
+    // failures prove the installation is no longer valid.
+    let mut enabled = false;
+    let mut disabled_reason = None;
+    for connection in connections {
+        if installation_id_from_metadata(&connection.metadata).is_none() {
+            continue;
+        }
+        if installation_is_disabled(&connection.metadata) {
+            if disabled_reason.is_none() {
+                disabled_reason = installation_disabled_reason(&connection.metadata)
+                    .map(|reason| reason.to_string());
+            }
+        } else {
+            enabled = true;
+            disabled_reason = None;
+            break;
+        }
+    }
+
     let providers = vec![ProviderWebhookMetadata {
         provider: "github",
-        enabled: true,
+        enabled,
+        disabled_reason,
         webhook_endpoint: "/webhooks/github",
         delivery_deduplication: true,
         trigger_source: "provider_triggers",

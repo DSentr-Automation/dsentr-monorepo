@@ -65,6 +65,8 @@ pub struct AuthorizationTokens {
     pub provider_user_id: Option<String>,
     pub slack: Option<SlackOAuthMetadata>,
     pub notion: Option<NotionOAuthMetadata>,
+    pub installation_id: Option<String>,
+    installation_id: None,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -105,6 +107,16 @@ pub struct OAuthTokenMetadata {
     pub provider_user_id: Option<String>,
     #[serde(default)]
     pub notion: Option<NotionOAuthMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installation_revoked: Option<bool>,
+    #[serde(
+        default,
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub disabled_at: Option<OffsetDateTime>,
 }
 
 #[derive(Debug, Clone)]
@@ -536,6 +548,7 @@ impl OAuthAccountService {
             encrypted_slack.clone(),
             provider_user_id,
             tokens.notion.clone(),
+            tokens.installation_id.clone(),
         );
 
         let stored = if let Some(existing) = existing {
@@ -737,6 +750,14 @@ impl OAuthAccountService {
                     "failed to propagate oauth reconnect tokens to workspace connection"
                 );
             }
+
+            if matches!(provider, ConnectedOAuthProvider::GitHub) {
+                let metadata_value = serialize_token_metadata(metadata.clone());
+                let _ = self
+                    .workspace_connections
+                    .update_metadata(connection.id, metadata_value)
+                    .await;
+            }
         }
     }
 
@@ -842,6 +863,23 @@ impl OAuthAccountService {
         {
             Ok(tokens) => tokens,
             Err(err) => {
+                if matches!(record.provider, ConnectedOAuthProvider::GitHub) {
+                    if let Err(mark_err) = self.mark_personal_installation_disabled(&record).await {
+                        warn!(
+                            ?mark_err,
+                            token_id = %record.id,
+                            user_id = %record.user_id,
+                            "failed to mark GitHub installation disabled after refresh failure"
+                        );
+                    } else {
+                        warn!(
+                            token_id = %record.id,
+                            user_id = %record.user_id,
+                            "marked GitHub installation disabled after refresh failure"
+                        );
+                    }
+                    return Err(err);
+                }
                 if matches!(err, OAuthAccountError::TokenRevoked { .. }) {
                     self.repo.delete_token_by_id(record.id).await?;
                     self.workspace_connections
@@ -871,6 +909,7 @@ impl OAuthAccountService {
             encrypted_slack.clone(),
             refreshed.provider_user_id.clone(),
             refreshed.notion.clone(),
+            refreshed.installation_id.clone(),
         );
 
         let updated = self
@@ -963,6 +1002,34 @@ impl OAuthAccountService {
         }
 
         Ok(decrypted)
+    }
+
+    async fn mark_personal_installation_disabled(
+        &self,
+        record: &UserOAuthToken,
+    ) -> Result<(), OAuthAccountError> {
+        if installation_is_disabled(&record.metadata) {
+            return Ok(());
+        }
+
+        let metadata = mark_installation_disabled(&record.metadata);
+        let _ = self
+            .repo
+            .update_token(
+                record.id,
+                NewUserOAuthToken {
+                    user_id: record.user_id,
+                    provider: record.provider,
+                    access_token: record.access_token.clone(),
+                    refresh_token: record.refresh_token.clone(),
+                    expires_at: record.expires_at,
+                    account_email: record.account_email.clone(),
+                    metadata,
+                },
+            )
+            .await?;
+
+        Ok(())
     }
 
     pub async fn delete_tokens(
@@ -1141,6 +1208,7 @@ impl OAuthAccountService {
             provider_user_id: Some(provider_user_id),
             slack: Some(personal_slack_meta),
             notion: None,
+            installation_id: None,
         };
 
         let workspace = AuthorizationTokens {
@@ -1151,6 +1219,7 @@ impl OAuthAccountService {
             provider_user_id: None,
             slack: Some(workspace_slack_meta),
             notion: None,
+            installation_id: None,
         };
 
         Ok((personal, workspace))
@@ -1232,6 +1301,7 @@ impl OAuthAccountService {
                 .and_then(normalize_provider_user_id),
             slack: None,
             notion: None,
+            installation_id: None,
         })
     }
 
@@ -1391,6 +1461,7 @@ impl OAuthAccountService {
             provider_user_id,
             slack: None,
             notion: None,
+            installation_id: None,
         })
     }
 
@@ -1463,6 +1534,7 @@ impl OAuthAccountService {
             provider_user_id: user_info.id.as_deref().and_then(normalize_provider_user_id),
             slack: None,
             notion: None,
+            installation_id: None,
         })
     }
 
@@ -1646,6 +1718,7 @@ impl OAuthAccountService {
             provider_user_id: Some(provider_user_id),
             slack: Some(slack_meta),
             notion: None,
+            installation_id: None,
         })
     }
 
@@ -1725,6 +1798,7 @@ impl OAuthAccountService {
             provider_user_id,
             slack: None,
             notion: None,
+            installation_id: None,
         })
     }
 
@@ -1847,6 +1921,7 @@ impl OAuthAccountService {
             provider_user_id,
             slack: None,
             notion: Some(metadata),
+            installation_id: None,
         })
     }
 
@@ -1901,6 +1976,7 @@ impl OAuthAccountService {
             provider_user_id: login.as_deref().and_then(normalize_provider_user_id),
             slack: None,
             notion: None,
+            installation_id: None,
         })
     }
     async fn exchange_raindrop_code(
@@ -1992,6 +2068,7 @@ impl OAuthAccountService {
             provider_user_id,
             slack: None,
             notion: None,
+            installation_id: None,
         })
     }
 
@@ -2079,6 +2156,7 @@ impl OAuthAccountService {
             provider_user_id: None,
             slack: None,
             notion: None,
+            installation_id: None,
         })
     }
 
@@ -2152,6 +2230,7 @@ impl OAuthAccountService {
             provider_user_id: None,
             slack: None,
             notion: None,
+            installation_id: None,
         })
     }
 
@@ -2217,6 +2296,7 @@ impl OAuthAccountService {
             provider_user_id: None,
             slack: None,
             notion: None,
+            installation_id: None,
         })
     }
 
@@ -2361,6 +2441,7 @@ impl OAuthAccountService {
             provider_user_id: Some(user_id),
             slack: Some(slack_meta),
             notion: None,
+            installation_id: None,
         })
     }
 
@@ -2425,6 +2506,7 @@ impl OAuthAccountService {
             provider_user_id: None,
             slack: None,
             notion: None,
+            installation_id: None,
         })
     }
 
@@ -2474,6 +2556,7 @@ impl OAuthAccountService {
             provider_user_id: None,
             slack: None,
             notion: None,
+            installation_id: None,
         })
     }
 
@@ -2945,6 +3028,22 @@ impl OAuthAccountService {
                 Err(sqlx::Error::RowNotFound)
             }
 
+            async fn update_metadata(
+                &self,
+                _connection_id: Uuid,
+                _metadata: serde_json::Value,
+            ) -> Result<WorkspaceConnection, sqlx::Error> {
+                Err(sqlx::Error::RowNotFound)
+            }
+
+            async fn update_metadata(
+                &self,
+                _connection_id: Uuid,
+                _metadata: serde_json::Value,
+            ) -> Result<WorkspaceConnection, sqlx::Error> {
+                Err(sqlx::Error::RowNotFound)
+            }
+
             async fn update_tokens_for_connection(
                 &self,
                 _connection_id: Uuid,
@@ -3134,6 +3233,56 @@ pub(crate) fn serialize_token_metadata(metadata: OAuthTokenMetadata) -> Value {
     serde_json::to_value(metadata).unwrap_or_else(|_| json!({}))
 }
 
+pub(crate) fn installation_id_from_metadata(metadata: &Value) -> Option<String> {
+    let parsed = parse_token_metadata(metadata);
+    if let Some(value) = parsed
+        .installation_id
+        .as_deref()
+        .and_then(normalize_installation_id)
+    {
+        return Some(value);
+    }
+
+    let raw = metadata
+        .get("installation_id")
+        .or_else(|| metadata.get("installationId"))?;
+
+    let candidate = match raw {
+        Value::String(value) => value.trim().to_string(),
+        Value::Number(value) => {
+            if let Some(num) = value.as_u64() {
+                num.to_string()
+            } else if let Some(num) = value.as_i64() {
+                num.to_string()
+            } else {
+                return None;
+            }
+        }
+        _ => return None,
+    };
+
+    normalize_installation_id(&candidate)
+}
+
+pub(crate) fn installation_disabled_reason(metadata: &Value) -> Option<&'static str> {
+    let parsed = parse_token_metadata(metadata);
+    if parsed.installation_revoked.unwrap_or(false) || parsed.disabled_at.is_some() {
+        return Some("installation_revoked");
+    }
+    None
+}
+
+pub(crate) fn installation_is_disabled(metadata: &Value) -> bool {
+    installation_disabled_reason(metadata).is_some()
+}
+
+pub(crate) fn mark_installation_disabled(metadata: &Value) -> Value {
+    let mut parsed = parse_token_metadata(metadata);
+    parsed.installation_revoked = Some(true);
+    parsed.disabled_at = Some(OffsetDateTime::now_utc());
+    serialize_token_metadata(parsed)
+}
+
 pub(crate) fn merge_slack_metadata(
     existing: Option<EncryptedSlackOAuthMetadata>,
     incoming: Option<EncryptedSlackOAuthMetadata>,
@@ -3194,6 +3343,18 @@ fn normalize_provider_user_id(value: &str) -> Option<String> {
     }
 }
 
+fn normalize_installation_id(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.chars().all(|ch| ch.is_ascii_digit()) {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
+}
+
 fn merge_provider_user_id(existing: Option<String>, incoming: Option<String>) -> Option<String> {
     incoming
         .as_deref()
@@ -3201,11 +3362,19 @@ fn merge_provider_user_id(existing: Option<String>, incoming: Option<String>) ->
         .or_else(|| existing.as_deref().and_then(normalize_provider_user_id))
 }
 
+fn merge_installation_id(existing: Option<String>, incoming: Option<String>) -> Option<String> {
+    incoming
+        .as_deref()
+        .and_then(normalize_installation_id)
+        .or_else(|| existing.as_deref().and_then(normalize_installation_id))
+}
+
 fn merge_metadata_value(
     existing: Option<&Value>,
     slack: Option<EncryptedSlackOAuthMetadata>,
     provider_user_id: Option<String>,
     notion: Option<NotionOAuthMetadata>,
+    installation_id: Option<String>,
 ) -> (OAuthTokenMetadata, Value) {
     let mut metadata = existing.map(parse_token_metadata).unwrap_or_default();
 
@@ -3213,6 +3382,20 @@ fn merge_metadata_value(
     metadata.provider_user_id =
         merge_provider_user_id(metadata.provider_user_id.clone(), provider_user_id);
     metadata.notion = merge_notion_metadata(metadata.notion.clone(), notion);
+    let normalized_installation_id = installation_id
+        .as_deref()
+        .and_then(normalize_installation_id);
+    let merged_installation_id = merge_installation_id(
+        metadata.installation_id.clone(),
+        normalized_installation_id.clone(),
+    );
+    if merged_installation_id != metadata.installation_id {
+        metadata.installation_id = merged_installation_id;
+    }
+    if normalized_installation_id.is_some() {
+        metadata.installation_revoked = None;
+        metadata.disabled_at = None;
+    }
 
     let value = serialize_token_metadata(metadata.clone());
     (metadata, value)
@@ -3522,6 +3705,20 @@ mod tests {
             _slack_team_id: Option<String>,
             _incoming_webhook_url: Option<String>,
         ) -> Result<WorkspaceConnection, sqlx::Error> {
+            Err(Error::RowNotFound)
+        }
+
+        async fn update_metadata(
+            &self,
+            connection_id: Uuid,
+            metadata: serde_json::Value,
+        ) -> Result<WorkspaceConnection, sqlx::Error> {
+            let mut guard = self.source_connections.lock().unwrap();
+            if let Some(conn) = guard.iter_mut().find(|conn| conn.id == connection_id) {
+                conn.metadata = metadata;
+                conn.updated_at = OffsetDateTime::now_utc();
+                return Ok(conn.clone());
+            }
             Err(Error::RowNotFound)
         }
 
@@ -5157,6 +5354,7 @@ mod tests {
             provider_user_id: None,
             slack: None,
             notion: None,
+            installation_id: None,
         };
 
         let stored = service
@@ -5259,6 +5457,7 @@ mod tests {
                     provider_user_id: None,
                     slack: None,
                     notion: None,
+                    installation_id: None,
                 },
             )
             .await
@@ -5276,6 +5475,7 @@ mod tests {
                     provider_user_id: None,
                     slack: None,
                     notion: None,
+                    installation_id: None,
                 },
             )
             .await
@@ -5303,6 +5503,7 @@ mod tests {
             slack: None,
             notion: None,
             provider_user_id: Some("google-123".into()),
+            ..Default::default()
         });
 
         let repo = Arc::new(MultiTokenRepo::new());
@@ -5413,6 +5614,7 @@ mod tests {
             provider_user_id: Some("google-123".into()),
             slack: None,
             notion: None,
+            installation_id: None,
         };
 
         let stored = service
@@ -5448,6 +5650,7 @@ mod tests {
             }),
             provider_user_id: Some("slack-123".into()),
             notion: None,
+            ..Default::default()
         });
 
         let repo = Arc::new(MultiTokenRepo::new());
@@ -5503,6 +5706,7 @@ mod tests {
                 incoming_webhook_url: None,
             }),
             notion: None,
+            installation_id: None,
         };
 
         let stored = OAuthAccountService::new(
@@ -5578,6 +5782,7 @@ mod tests {
             }),
             provider_user_id: Some("U123".into()),
             notion: None,
+            ..Default::default()
         });
 
         let repo = Arc::new(MultiTokenRepo::new());
@@ -5660,6 +5865,7 @@ mod tests {
                 incoming_webhook_url: None,
             }),
             notion: None,
+            installation_id: None,
         };
 
         let stored = service
@@ -5693,6 +5899,7 @@ mod tests {
                 slack: None,
                 notion: None,
                 provider_user_id: Some("google-456".into()),
+                ..Default::default()
             }),
             is_shared: false,
             created_at: now - Duration::hours(1),
@@ -5761,6 +5968,7 @@ mod tests {
             provider_user_id: Some("google-456".into()),
             slack: None,
             notion: None,
+            installation_id: None,
         };
 
         let stored = service
@@ -5882,6 +6090,7 @@ mod tests {
                     provider_user_id: None,
                     slack: None,
                     notion: None,
+                    installation_id: None,
                 },
             )
             .await
@@ -5899,6 +6108,7 @@ mod tests {
                     provider_user_id: None,
                     slack: None,
                     notion: None,
+                    installation_id: None,
                 },
             )
             .await
@@ -6003,6 +6213,7 @@ mod tests {
                     provider_user_id: None,
                     slack: None,
                     notion: None,
+                    installation_id: None,
                 },
             )
             .await
@@ -6020,6 +6231,7 @@ mod tests {
                     provider_user_id: None,
                     slack: None,
                     notion: None,
+                    installation_id: None,
                 },
             )
             .await
@@ -6037,6 +6249,7 @@ mod tests {
                     provider_user_id: None,
                     slack: None,
                     notion: None,
+                    installation_id: None,
                 })
             },
         )));
@@ -6078,6 +6291,7 @@ mod tests {
             slack: None,
             notion: None,
             provider_user_id: Some("U123".into()),
+            ..Default::default()
         });
 
         let repo = Arc::new(MultiTokenRepo::new());
@@ -6188,6 +6402,7 @@ mod tests {
                         incoming_webhook_url: None,
                     }),
                     notion: None,
+                    installation_id: None,
                 })
             },
         )));

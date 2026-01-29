@@ -1023,6 +1023,14 @@ impl WorkspaceConnectionRepository for WorkspaceConnectionsStub {
         Err(sqlx::Error::RowNotFound)
     }
 
+    async fn update_metadata(
+        &self,
+        _connection_id: Uuid,
+        _metadata: serde_json::Value,
+    ) -> Result<WorkspaceConnection, sqlx::Error> {
+        Err(sqlx::Error::RowNotFound)
+    }
+
     async fn delete_connection(&self, _connection_id: Uuid) -> Result<(), sqlx::Error> {
         Ok(())
     }
@@ -1238,6 +1246,14 @@ impl WorkspaceConnectionRepository for RecordingWorkspaceConnectionRepo {
         _bot_user_id: Option<String>,
         _slack_team_id: Option<String>,
         _incoming_webhook_url: Option<String>,
+    ) -> Result<WorkspaceConnection, sqlx::Error> {
+        Err(sqlx::Error::RowNotFound)
+    }
+
+    async fn update_metadata(
+        &self,
+        _connection_id: Uuid,
+        _metadata: serde_json::Value,
     ) -> Result<WorkspaceConnection, sqlx::Error> {
         Err(sqlx::Error::RowNotFound)
     }

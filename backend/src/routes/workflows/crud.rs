@@ -10,16 +10,21 @@ use super::{
 };
 use crate::{
     db::{
-        oauth_token_repository::UserOAuthTokenRepository,
+        oauth_token_repository::NewUserOAuthToken,
         postgres_oauth_token_repository::PostgresUserOAuthTokenRepository,
         postgres_provider_trigger_repository::PostgresProviderTriggerRepository,
         provider_trigger_repository::ProviderTriggerRepository,
     },
     models::{
-        oauth_token::ConnectedOAuthProvider,
+        oauth_token::{ConnectedOAuthProvider, UserOAuthToken, WorkspaceConnection},
         provider_trigger::{CreateProviderTrigger, ProviderTriggerProvider},
     },
-    services::oauth::{account_service::OAuthAccountError, workspace_service::WorkspaceOAuthError},
+    services::oauth::{
+        account_service::{
+            installation_is_disabled, mark_installation_disabled, OAuthAccountError,
+        },
+        workspace_service::WorkspaceOAuthError,
+    },
     utils::change_history::log_workspace_history_event,
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -50,6 +55,13 @@ struct GitHubActivationPlan {
 struct GitHubConnectionContext {
     access_token: String,
     installation_id: String,
+    scope: GitHubConnectionScope,
+}
+
+#[derive(Clone)]
+enum GitHubConnectionScope {
+    Workspace(WorkspaceConnection),
+    Personal(UserOAuthToken),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -233,8 +245,7 @@ async fn prepare_github_trigger_activation(
         ));
     }
 
-    validate_github_repository_access(app_state, &connection.access_token, &outcome.mappings)
-        .await?;
+    validate_github_repository_access(app_state, &connection, &outcome.mappings).await?;
 
     Ok(Some(GitHubActivationPlan {
         mappings: outcome.mappings,
@@ -272,6 +283,9 @@ async fn resolve_github_connection_context(
         connections.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         let mut missing_installation_id = false;
         for connection in connections {
+            if installation_is_disabled(&connection.metadata) {
+                continue;
+            }
             match app_state
                 .workspace_oauth
                 .ensure_valid_workspace_token(connection.id)
@@ -284,6 +298,7 @@ async fn resolve_github_connection_context(
                         return Ok(GitHubConnectionContext {
                             access_token: decrypted.access_token,
                             installation_id,
+                            scope: GitHubConnectionScope::Workspace(connection),
                         });
                     }
                     missing_installation_id = true;
@@ -377,6 +392,9 @@ async fn resolve_github_connection_context(
     tokens.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     let mut missing_installation_id = false;
     for token in tokens {
+        if installation_is_disabled(&token.metadata) {
+            continue;
+        }
         match app_state
             .oauth_accounts
             .ensure_valid_access_token_for_connection(owner_id, token.id)
@@ -389,6 +407,7 @@ async fn resolve_github_connection_context(
                     return Ok(GitHubConnectionContext {
                         access_token: stored.access_token,
                         installation_id,
+                        scope: GitHubConnectionScope::Personal(token),
                     });
                 }
                 missing_installation_id = true;
@@ -438,7 +457,7 @@ async fn resolve_github_connection_context(
 
 async fn validate_github_repository_access(
     app_state: &AppState,
-    access_token: &str,
+    connection: &GitHubConnectionContext,
     mappings: &[GitHubTriggerMapping],
 ) -> Result<(), Response> {
     const GITHUB_VALIDATION_TIMEOUT: Duration = Duration::from_secs(8);
@@ -466,7 +485,7 @@ async fn validate_github_repository_access(
         let response = match app_state
             .http_client
             .get(url)
-            .bearer_auth(access_token)
+            .bearer_auth(&connection.access_token)
             .header("Accept", "application/vnd.github+json")
             .header("User-Agent", "dsentr")
             .timeout(GITHUB_VALIDATION_TIMEOUT)
@@ -493,6 +512,10 @@ async fn validate_github_repository_access(
         }
 
         let status = response.status();
+        if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+            mark_github_connection_disabled(app_state, connection).await;
+        }
+
         let code = if status == StatusCode::NOT_FOUND {
             "github_trigger_repo_not_found"
         } else if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
@@ -513,6 +536,83 @@ async fn validate_github_repository_access(
     }
 
     Ok(())
+}
+
+async fn mark_github_connection_disabled(
+    app_state: &AppState,
+    connection: &GitHubConnectionContext,
+) {
+    match &connection.scope {
+        GitHubConnectionScope::Workspace(record) => {
+            if installation_is_disabled(&record.metadata) {
+                return;
+            }
+            let metadata = mark_installation_disabled(&record.metadata);
+            match app_state
+                .workspace_connection_repo
+                .update_metadata(record.id, metadata)
+                .await
+            {
+                Ok(_) => {
+                    tracing::warn!(
+                        connection_id = %record.id,
+                        workspace_id = %record.workspace_id,
+                        owner_user_id = %record.owner_user_id,
+                        "marked GitHub installation disabled after repository access failure"
+                    );
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        ?err,
+                        connection_id = %record.id,
+                        workspace_id = %record.workspace_id,
+                        owner_user_id = %record.owner_user_id,
+                        "failed to mark GitHub installation disabled after repository access failure"
+                    );
+                }
+            }
+        }
+        GitHubConnectionScope::Personal(record) => {
+            if installation_is_disabled(&record.metadata) {
+                return;
+            }
+            let metadata = mark_installation_disabled(&record.metadata);
+            let repo = PostgresUserOAuthTokenRepository {
+                pool: (*app_state.db_pool).clone(),
+            };
+            match repo
+                .update_token(
+                    record.id,
+                    NewUserOAuthToken {
+                        user_id: record.user_id,
+                        provider: record.provider,
+                        access_token: record.access_token.clone(),
+                        refresh_token: record.refresh_token.clone(),
+                        expires_at: record.expires_at,
+                        account_email: record.account_email.clone(),
+                        metadata,
+                    },
+                )
+                .await
+            {
+                Ok(_) => {
+                    tracing::warn!(
+                        token_id = %record.id,
+                        user_id = %record.user_id,
+                        "marked GitHub installation disabled after repository access failure"
+                    );
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        ?err,
+                        token_id = %record.id,
+                        user_id = %record.user_id,
+                        "failed to mark GitHub installation disabled after repository access failure"
+                    );
+                }
+            }
+        }
+    }
 }
 
 async fn insert_github_provider_triggers(

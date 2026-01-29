@@ -59,3 +59,4 @@
 - OAuth route test configs now include GitHub App settings to satisfy updated Config and OAuthAccountService wiring.
 - GitHub OAuth connect flow now documents that the authorize URL requires a GitHub App with user OAuth enabled.
 - Added GitHub OAuth connect start/callback tests with stubbed token exchange and personal-token assertions so GitHub routing stays aligned with other providers.
+- OAuth route test workspace connection stubs now implement metadata updates to satisfy the expanded workspace connection repository trait.

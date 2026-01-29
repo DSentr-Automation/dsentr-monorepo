@@ -189,6 +189,12 @@ pub trait WorkspaceConnectionRepository: Send + Sync {
         incoming_webhook_url: Option<String>,
     ) -> Result<WorkspaceConnection, sqlx::Error>;
 
+    async fn update_metadata(
+        &self,
+        connection_id: Uuid,
+        metadata: serde_json::Value,
+    ) -> Result<WorkspaceConnection, sqlx::Error>;
+
     async fn delete_connection(&self, connection_id: Uuid) -> Result<(), sqlx::Error>;
 
     async fn delete_by_id(&self, connection_id: Uuid) -> Result<(), sqlx::Error>;
@@ -333,6 +339,14 @@ impl WorkspaceConnectionRepository for NoopWorkspaceConnectionRepository {
         _bot_user_id: Option<String>,
         _slack_team_id: Option<String>,
         _incoming_webhook_url: Option<String>,
+    ) -> Result<WorkspaceConnection, sqlx::Error> {
+        Err(sqlx::Error::RowNotFound)
+    }
+
+    async fn update_metadata(
+        &self,
+        _connection_id: Uuid,
+        _metadata: serde_json::Value,
     ) -> Result<WorkspaceConnection, sqlx::Error> {
         Err(sqlx::Error::RowNotFound)
     }

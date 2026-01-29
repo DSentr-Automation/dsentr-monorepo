@@ -24,7 +24,8 @@ use crate::models::oauth_token::{
     WORKSPACE_AUDIT_EVENT_CONNECTION_PROMOTED, WORKSPACE_AUDIT_EVENT_CONNECTION_UNSHARED,
 };
 use crate::services::oauth::account_service::{
-    clear_webhook, encrypt_slack_metadata_with_key, merge_slack_metadata, parse_token_metadata,
+    clear_webhook, encrypt_slack_metadata_with_key, installation_is_disabled,
+    mark_installation_disabled, merge_slack_metadata, parse_token_metadata,
     serialize_token_metadata, slack_metadata_from_value, AuthorizationTokens,
     EncryptedSlackOAuthMetadata, OAuthAccountError, OAuthAccountService, OAuthTokenMetadata,
 };
@@ -191,6 +192,10 @@ impl WorkspaceOAuthService {
                 slack: slack_meta.clone(),
                 provider_user_id: provider_user_id.clone(),
                 notion: notion_meta.clone(),
+                installation_id: existing_metadata.installation_id.clone(),
+                installation_revoked: existing_metadata.installation_revoked,
+                disabled_at: existing_metadata.disabled_at,
+                ..Default::default()
             });
 
             let _ = self
@@ -227,6 +232,10 @@ impl WorkspaceOAuthService {
                 slack: None,
                 provider_user_id: provider_user_id.clone(),
                 notion: notion_meta.clone(),
+                installation_id: existing_metadata.installation_id.clone(),
+                installation_revoked: existing_metadata.installation_revoked,
+                disabled_at: existing_metadata.disabled_at,
+                ..Default::default()
             })
         };
 
@@ -262,6 +271,10 @@ impl WorkspaceOAuthService {
                 slack: clear_webhook(slack_meta.clone()),
                 provider_user_id: provider_user_id.clone(),
                 notion: notion_meta.clone(),
+                installation_id: existing_metadata.installation_id.clone(),
+                installation_revoked: existing_metadata.installation_revoked,
+                disabled_at: existing_metadata.disabled_at,
+                ..Default::default()
             });
 
             let _ = self
@@ -653,6 +666,35 @@ impl WorkspaceOAuthService {
             {
                 Ok(tokens) => tokens,
                 Err(err) => {
+                    if matches!(decrypted.provider, ConnectedOAuthProvider::GitHub) {
+                        if !installation_is_disabled(&record.metadata) {
+                            let metadata = mark_installation_disabled(&record.metadata);
+                            match self
+                                .workspace_connections
+                                .update_metadata(connection_id, metadata)
+                                .await
+                            {
+                                Ok(_) => {
+                                    warn!(
+                                        connection_id = %connection_id,
+                                        workspace_id = %record.workspace_id,
+                                        owner_user_id = %record.owner_user_id,
+                                        "marked GitHub installation disabled after refresh failure"
+                                    );
+                                }
+                                Err(mark_err) => {
+                                    warn!(
+                                        ?mark_err,
+                                        connection_id = %connection_id,
+                                        workspace_id = %record.workspace_id,
+                                        owner_user_id = %record.owner_user_id,
+                                        "failed to mark GitHub installation disabled after refresh failure"
+                                    );
+                                }
+                            }
+                        }
+                        return Err(WorkspaceOAuthError::OAuth(err));
+                    }
                     if matches!(err, OAuthAccountError::TokenRevoked { .. }) {
                         self.workspace_connections
                             .delete_connection(connection_id)
@@ -1150,6 +1192,14 @@ impl WorkspaceOAuthService {
                 _bot_user_id: Option<String>,
                 _slack_team_id: Option<String>,
                 _incoming_webhook_url: Option<String>,
+            ) -> Result<WorkspaceConnection, sqlx::Error> {
+                Err(sqlx::Error::RowNotFound)
+            }
+
+            async fn update_metadata(
+                &self,
+                _connection_id: Uuid,
+                _metadata: serde_json::Value,
             ) -> Result<WorkspaceConnection, sqlx::Error> {
                 Err(sqlx::Error::RowNotFound)
             }
@@ -1928,6 +1978,22 @@ mod tests {
             Err(sqlx::Error::RowNotFound)
         }
 
+        async fn update_metadata(
+            &self,
+            connection_id: Uuid,
+            metadata: serde_json::Value,
+        ) -> Result<WorkspaceConnection, sqlx::Error> {
+            let mut guard = self.connection.lock().unwrap();
+            if let Some(conn) = guard.as_mut() {
+                if conn.id == connection_id {
+                    conn.metadata = metadata;
+                    conn.updated_at = OffsetDateTime::now_utc();
+                    return Ok(conn.clone());
+                }
+            }
+            Err(sqlx::Error::RowNotFound)
+        }
+
         async fn delete_connection(&self, connection_id: Uuid) -> Result<(), sqlx::Error> {
             let mut guard = self.connection.lock().unwrap();
             if guard.as_ref().map(|record| record.id) == Some(connection_id) {
@@ -2544,6 +2610,20 @@ mod tests {
             Err(sqlx::Error::RowNotFound)
         }
 
+        async fn update_metadata(
+            &self,
+            connection_id: Uuid,
+            metadata: serde_json::Value,
+        ) -> Result<WorkspaceConnection, sqlx::Error> {
+            let mut guard = self.connections.lock().unwrap();
+            if let Some(record) = guard.iter_mut().find(|conn| conn.id == connection_id) {
+                record.metadata = metadata;
+                record.updated_at = OffsetDateTime::now_utc();
+                return Ok(record.clone());
+            }
+            Err(sqlx::Error::RowNotFound)
+        }
+
         async fn update_tokens_for_connection(
             &self,
             connection_id: Uuid,
@@ -2748,6 +2828,7 @@ mod tests {
                     incoming_webhook_url: Some("https://hooks.slack.com/services/abc".into()),
                 },
             ),
+            installation_id: None,
         };
         let refresher = RecordingTokenRefresher::without_delay(refreshed_tokens.clone());
         let workspace_token_refresher: Arc<dyn WorkspaceTokenRefresher> =
@@ -2850,6 +2931,7 @@ mod tests {
                     incoming_webhook_url: None,
                 },
             ),
+            installation_id: None,
         };
 
         let err = service
@@ -2896,6 +2978,7 @@ mod tests {
                     incoming_webhook_url: Some("https://hooks.slack.com/services/abc".into()),
                 },
             ),
+            installation_id: None,
         };
 
         let first = service
@@ -2936,6 +3019,7 @@ mod tests {
                     incoming_webhook_url: Some("https://hooks.slack.com/services/next".into()),
                 },
             ),
+            installation_id: None,
         };
 
         let second = service
@@ -3007,6 +3091,7 @@ mod tests {
                     incoming_webhook_url: None,
                 },
             ),
+            installation_id: None,
         };
 
         let first = service
@@ -3076,6 +3161,7 @@ mod tests {
                     incoming_webhook_url: None,
                 },
             ),
+            installation_id: None,
         };
 
         service
@@ -4094,6 +4180,7 @@ mod tests {
             provider_user_id: None,
             notion: None,
             slack: None,
+            installation_id: None,
         };
         let refresher = RecordingTokenRefresher::without_delay(refreshed_tokens.clone());
         let service = WorkspaceOAuthService::new(
@@ -4233,6 +4320,7 @@ mod tests {
             provider_user_id: None,
             notion: None,
             slack: None,
+            installation_id: None,
         };
         let refresher = RecordingTokenRefresher::new(refreshed_tokens.clone());
         let service = Arc::new(WorkspaceOAuthService::new(

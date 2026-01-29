@@ -119,3 +119,5 @@
 - GitHub provider webhook route tests now include provider-trigger deletion helpers in the stub repo to keep test doubles aligned with the repository trait.
 - GitHub provider trigger resolution now emits a safe debug log with counts only (no payloads or IDs) for observability.
 - Added a read-only settings endpoint to list provider webhook metadata per workspace for the Webhooks UI.
+- Provider GitHub webhook ingress now skips dispatching triggers tied to disabled GitHub installations, and settings webhook metadata reflects enabled/disabled state with optional disconnect reasons.
+- Route-level workspace connection stubs (Slack/Microsoft/Workspaces) now implement metadata updates to satisfy the expanded workspace connection repository trait.

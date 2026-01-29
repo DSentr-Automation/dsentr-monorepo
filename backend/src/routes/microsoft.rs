@@ -717,6 +717,14 @@ mod tests {
             Err(sqlx::Error::RowNotFound)
         }
 
+        async fn update_metadata(
+            &self,
+            _connection_id: Uuid,
+            _metadata: serde_json::Value,
+        ) -> Result<WorkspaceConnection, sqlx::Error> {
+            Err(sqlx::Error::RowNotFound)
+        }
+
         async fn delete_connection(&self, _connection_id: Uuid) -> Result<(), sqlx::Error> {
             Ok(())
         }

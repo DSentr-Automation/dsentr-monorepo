@@ -2341,6 +2341,22 @@ mod tests {
             Err(SqlxError::RowNotFound)
         }
 
+        async fn update_metadata(
+            &self,
+            connection_id: Uuid,
+            metadata: serde_json::Value,
+        ) -> Result<WorkspaceConnection, SqlxError> {
+            let mut guard = self.connection.lock().unwrap();
+            if let Some(existing) = guard.as_mut() {
+                if existing.id == connection_id {
+                    existing.metadata = metadata;
+                    existing.updated_at = OffsetDateTime::now_utc();
+                    return Ok(existing.clone());
+                }
+            }
+            Err(SqlxError::RowNotFound)
+        }
+
         async fn delete_connection(&self, _connection_id: Uuid) -> Result<(), SqlxError> {
             Ok(())
         }
@@ -3258,6 +3274,7 @@ mod tests {
                         team_id: Some("T123".into()),
                         ..Default::default()
                     }),
+                    installation_id: None,
                 })
             },
         )));
@@ -3444,6 +3461,7 @@ mod tests {
                         team_id: Some("T123".into()),
                         ..Default::default()
                     }),
+                    installation_id: None,
                 })
             },
         )));
@@ -3875,6 +3893,13 @@ mod tests {
             ) -> Result<WorkspaceConnection, SqlxError> {
                 Err(SqlxError::RowNotFound)
             }
+            async fn update_metadata(
+                &self,
+                _connection_id: Uuid,
+                _metadata: serde_json::Value,
+            ) -> Result<WorkspaceConnection, SqlxError> {
+                Err(SqlxError::RowNotFound)
+            }
             async fn delete_connection(&self, _connection_id: Uuid) -> Result<(), SqlxError> {
                 Ok(())
             }
@@ -4125,6 +4150,13 @@ mod tests {
                 _bot_user_id: Option<String>,
                 _slack_team_id: Option<String>,
                 _incoming_webhook_url: Option<String>,
+            ) -> Result<WorkspaceConnection, SqlxError> {
+                Err(SqlxError::RowNotFound)
+            }
+            async fn update_metadata(
+                &self,
+                _connection_id: Uuid,
+                _metadata: serde_json::Value,
             ) -> Result<WorkspaceConnection, SqlxError> {
                 Err(SqlxError::RowNotFound)
             }

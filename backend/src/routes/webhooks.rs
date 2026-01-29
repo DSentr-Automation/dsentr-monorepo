@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
@@ -31,6 +32,8 @@ use crate::db::webhook_source_repository::WebhookSourceRepository;
 use crate::db::webhook_subscription_repository::WebhookSubscriptionRepository;
 use crate::db::workflow_repository::WorkflowRepository;
 use crate::db::workspace_repository::WorkspaceRepository;
+use crate::models::oauth_token::ConnectedOAuthProvider;
+use crate::models::provider_trigger::ProviderTrigger;
 use crate::models::webhook_source::WebhookSource;
 use crate::models::workspace::{WorkspaceMembershipSummary, WorkspaceRole};
 use crate::responses::JsonResponse;
@@ -43,6 +46,9 @@ use crate::routes::github_provider_trigger_planner::build_execution_plan;
 use crate::routes::github_provider_trigger_resolver::GitHubProviderTriggerResolver;
 use crate::routes::webhook_ingress_validation::{
     validate_webhook_signature, WebhookSignatureError, SIGNATURE_HEADER, TIMESTAMP_HEADER,
+};
+use crate::services::oauth::account_service::{
+    installation_id_from_metadata, installation_is_disabled,
 };
 use crate::state::AppState;
 use crate::utils::egress_allowlist::normalize_egress_allowlist;
@@ -1965,10 +1971,9 @@ async fn handle_github_webhook_ingress(
         .await
     {
         Ok(matches) => {
-            let _handoff = build_handoff(
-                build_dispatch_list(build_execution_plan(matches.clone())),
-                github_delivery,
-            );
+            let mut plan = build_execution_plan(matches.clone());
+            plan.triggers = filter_disabled_provider_triggers(app_state, plan.triggers).await;
+            let _handoff = build_handoff(build_dispatch_list(plan), github_delivery);
             let _contexts = match resolve_execution_contexts(
                 _handoff.clone(),
                 app_state.workflow_repo.as_ref(),
@@ -2026,6 +2031,66 @@ async fn handle_github_webhook_ingress(
         now,
     )
     .await
+}
+
+async fn filter_disabled_provider_triggers(
+    app_state: &AppState,
+    triggers: Vec<ProviderTrigger>,
+) -> Vec<ProviderTrigger> {
+    let mut filtered = Vec::with_capacity(triggers.len());
+    let mut workspace_cache: HashMap<Uuid, Vec<crate::models::oauth_token::WorkspaceConnection>> =
+        HashMap::new();
+
+    for trigger in triggers {
+        let Some(workspace_id) = trigger.workspace_id else {
+            filtered.push(trigger);
+            continue;
+        };
+        let Some(installation_id) = trigger.installation_id.as_deref() else {
+            filtered.push(trigger);
+            continue;
+        };
+
+        if !workspace_cache.contains_key(&workspace_id) {
+            let connections = app_state
+                .workspace_connection_repo
+                .list_by_workspace_and_provider(workspace_id, ConnectedOAuthProvider::GitHub)
+                .await
+                .unwrap_or_default();
+            workspace_cache.insert(workspace_id, connections);
+        }
+
+        let connections = workspace_cache
+            .get(&workspace_id)
+            .map(|list| list.as_slice())
+            .unwrap_or_default();
+
+        let disabled_connection = connections
+            .iter()
+            .filter(|connection| {
+                installation_id_from_metadata(&connection.metadata).as_deref()
+                    == Some(installation_id)
+            })
+            .max_by(|a, b| a.updated_at.cmp(&b.updated_at))
+            .filter(|connection| installation_is_disabled(&connection.metadata));
+
+        if let Some(connection) = disabled_connection {
+            warn!(
+                trigger_id = %trigger.id,
+                workflow_id = %trigger.workflow_id,
+                trigger_node_id = %trigger.trigger_node_id,
+                workspace_id = %workspace_id,
+                installation_id = %installation_id,
+                connection_id = %connection.id,
+                "provider trigger skipped due to disabled GitHub installation"
+            );
+            continue;
+        }
+
+        filtered.push(trigger);
+    }
+
+    filtered
 }
 
 #[allow(clippy::too_many_arguments)]

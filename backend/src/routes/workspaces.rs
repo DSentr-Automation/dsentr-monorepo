@@ -2657,6 +2657,21 @@ mod tests {
             Err(sqlx::Error::RowNotFound)
         }
 
+        async fn update_metadata(
+            &self,
+            connection_id: Uuid,
+            metadata: serde_json::Value,
+        ) -> Result<WorkspaceConnection, sqlx::Error> {
+            let mut guard = self.connections.lock().unwrap();
+            if let Some(existing) = guard.iter_mut().find(|record| record.id == connection_id) {
+                existing.metadata = metadata;
+                existing.updated_at = OffsetDateTime::now_utc();
+                return Ok(existing.clone());
+            }
+
+            Err(sqlx::Error::RowNotFound)
+        }
+
         async fn delete_connection(&self, connection_id: Uuid) -> Result<(), sqlx::Error> {
             {
                 let mut guard = self.connections.lock().unwrap();

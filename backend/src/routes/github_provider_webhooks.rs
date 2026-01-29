@@ -8,6 +8,7 @@ use axum::{
 use hmac::{Hmac, Mac};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
@@ -21,6 +22,8 @@ use crate::db::provider_trigger_repository::ProviderTriggerRepository;
 use crate::db::webhook_ingress_dedupe_repository::{
     WebhookIngressDedupeKey, WebhookIngressDedupeRepository,
 };
+use crate::models::oauth_token::ConnectedOAuthProvider;
+use crate::models::provider_trigger::ProviderTrigger;
 use crate::responses::JsonResponse;
 use crate::routes::github_provider_trigger_dispatcher::build_dispatch_list;
 use crate::routes::github_provider_trigger_engine_bridge::ProviderTriggerEngineBridge;
@@ -28,6 +31,9 @@ use crate::routes::github_provider_trigger_execution_context::resolve_execution_
 use crate::routes::github_provider_trigger_handoff::build_handoff;
 use crate::routes::github_provider_trigger_planner::build_execution_plan;
 use crate::routes::github_provider_trigger_resolver::GitHubProviderTriggerResolver;
+use crate::services::oauth::account_service::{
+    installation_id_from_metadata, installation_is_disabled,
+};
 use crate::state::AppState;
 
 const GITHUB_EVENT_HEADER: &str = "X-GitHub-Event";
@@ -221,7 +227,9 @@ async fn handle_github_provider_event(
                 return accepted_response();
             }
 
-            let dispatches = build_dispatch_list(build_execution_plan(matches));
+            let mut plan = build_execution_plan(matches);
+            plan.triggers = filter_disabled_provider_triggers(app_state, plan.triggers).await;
+            let dispatches = build_dispatch_list(plan);
             if dispatches.is_empty() {
                 Span::current().record("trigger_count", 0);
                 Span::current().record("run_count", 0);
@@ -274,6 +282,66 @@ async fn handle_github_provider_event(
     }
 
     accepted_response()
+}
+
+async fn filter_disabled_provider_triggers(
+    app_state: &AppState,
+    triggers: Vec<ProviderTrigger>,
+) -> Vec<ProviderTrigger> {
+    let mut filtered = Vec::with_capacity(triggers.len());
+    let mut workspace_cache: HashMap<Uuid, Vec<crate::models::oauth_token::WorkspaceConnection>> =
+        HashMap::new();
+
+    for trigger in triggers {
+        let Some(workspace_id) = trigger.workspace_id else {
+            filtered.push(trigger);
+            continue;
+        };
+        let Some(installation_id) = trigger.installation_id.as_deref() else {
+            filtered.push(trigger);
+            continue;
+        };
+
+        if !workspace_cache.contains_key(&workspace_id) {
+            let connections = app_state
+                .workspace_connection_repo
+                .list_by_workspace_and_provider(workspace_id, ConnectedOAuthProvider::GitHub)
+                .await
+                .unwrap_or_default();
+            workspace_cache.insert(workspace_id, connections);
+        }
+
+        let connections = workspace_cache
+            .get(&workspace_id)
+            .map(|list| list.as_slice())
+            .unwrap_or_default();
+
+        let disabled_connection = connections
+            .iter()
+            .filter(|connection| {
+                installation_id_from_metadata(&connection.metadata).as_deref()
+                    == Some(installation_id)
+            })
+            .max_by(|a, b| a.updated_at.cmp(&b.updated_at))
+            .filter(|connection| installation_is_disabled(&connection.metadata));
+
+        if let Some(connection) = disabled_connection {
+            warn!(
+                trigger_id = %trigger.id,
+                workflow_id = %trigger.workflow_id,
+                trigger_node_id = %trigger.trigger_node_id,
+                workspace_id = %workspace_id,
+                installation_id = %installation_id,
+                connection_id = %connection.id,
+                "provider trigger skipped due to disabled GitHub installation"
+            );
+            continue;
+        }
+
+        filtered.push(trigger);
+    }
+
+    filtered
 }
 
 fn accepted_response() -> Response {

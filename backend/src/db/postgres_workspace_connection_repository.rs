@@ -620,6 +620,45 @@ impl WorkspaceConnectionRepository for PostgresWorkspaceConnectionRepository {
         .await
     }
 
+    async fn update_metadata(
+        &self,
+        connection_id: Uuid,
+        metadata: serde_json::Value,
+    ) -> Result<WorkspaceConnection, sqlx::Error> {
+        sqlx::query_as!(
+            WorkspaceConnection,
+            r#"
+            UPDATE workspace_connections
+            SET
+                metadata = $2,
+                updated_at = now()
+            WHERE id = $1
+            RETURNING
+                id,
+                connection_id as "connection_id?",
+                workspace_id,
+                created_by,
+                owner_user_id,
+                user_oauth_token_id as "user_oauth_token_id?",
+                provider as "provider: _",
+                access_token,
+                refresh_token,
+                expires_at,
+                account_email,
+                created_at,
+                updated_at,
+                bot_user_id,
+                slack_team_id,
+                incoming_webhook_url,
+                metadata
+            "#,
+            connection_id,
+            metadata,
+        )
+        .fetch_one(&self.pool)
+        .await
+    }
+
     async fn delete_connection(&self, connection_id: Uuid) -> Result<(), sqlx::Error> {
         self.delete_by_id(connection_id).await
     }

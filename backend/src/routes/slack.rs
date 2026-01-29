@@ -739,6 +739,14 @@ mod tests {
             Err(sqlx::Error::RowNotFound)
         }
 
+        async fn update_metadata(
+            &self,
+            _connection_id: Uuid,
+            _metadata: serde_json::Value,
+        ) -> Result<WorkspaceConnection, sqlx::Error> {
+            Err(sqlx::Error::RowNotFound)
+        }
+
         async fn delete_connection(&self, _connection_id: Uuid) -> Result<(), sqlx::Error> {
             Ok(())
         }
@@ -1455,6 +1463,20 @@ mod tests {
                 Ok(listing.clone())
             }
 
+            async fn update_metadata(
+                &self,
+                connection_id: Uuid,
+                metadata: serde_json::Value,
+            ) -> Result<WorkspaceConnection, sqlx::Error> {
+                let mut listing = self.listing.lock().unwrap();
+                if connection_id != listing.id {
+                    return Err(sqlx::Error::RowNotFound);
+                }
+                listing.metadata = metadata;
+                listing.updated_at = OffsetDateTime::now_utc();
+                Ok(listing.clone())
+            }
+
             async fn delete_connection(&self, _connection_id: Uuid) -> Result<(), sqlx::Error> {
                 Ok(())
             }
@@ -1565,6 +1587,7 @@ mod tests {
                                 incoming_webhook_url: None,
                             },
                         ),
+                        installation_id: None,
                     },
                 )
             },
@@ -1850,6 +1873,13 @@ mod tests {
                 _bot_user_id: Option<String>,
                 _slack_team_id: Option<String>,
                 _incoming_webhook_url: Option<String>,
+            ) -> Result<WorkspaceConnection, sqlx::Error> {
+                Err(sqlx::Error::RowNotFound)
+            }
+            async fn update_metadata(
+                &self,
+                _connection_id: Uuid,
+                _metadata: serde_json::Value,
             ) -> Result<WorkspaceConnection, sqlx::Error> {
                 Err(sqlx::Error::RowNotFound)
             }

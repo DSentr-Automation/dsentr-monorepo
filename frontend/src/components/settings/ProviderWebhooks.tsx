@@ -6,6 +6,7 @@ import type { PlanTier } from '@/lib/planTiers'
 type ProviderWebhookMetadata = {
   provider: string
   enabled: boolean
+  disabled_reason?: string | null
   webhook_endpoint: string
   delivery_deduplication: boolean
   trigger_source: string
@@ -57,6 +58,7 @@ export default function ProviderWebhooks({
 
   const isWorkspacePlan = planTier === 'workspace'
   const baseUrl = useMemo(() => (API_BASE_URL || '').replace(/\/$/, ''), [])
+  const githubManageUrl = 'https://github.com/settings/installations'
 
   const loadProviders = useCallback(async () => {
     if (!isWorkspacePlan || !workspaceId) {
@@ -122,6 +124,13 @@ export default function ProviderWebhooks({
               provider.description
             )
             const howItWorks = providerHowItWorks(provider.provider)
+            const isGithub = provider.provider.toLowerCase() === 'github'
+            const installUrl =
+              isGithub && workspaceId
+                ? `${baseUrl}/api/oauth/github/start?workspace=${encodeURIComponent(
+                    workspaceId
+                  )}`
+                : null
 
             return (
               <div
@@ -139,7 +148,7 @@ export default function ProviderWebhooks({
                         : 'border-zinc-200 bg-zinc-100 text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'
                     }`}
                   >
-                    {provider.enabled ? 'Enabled' : 'Disabled'}
+                    {provider.enabled ? 'Enabled' : 'Disconnected'}
                   </span>
                 </div>
 
@@ -204,6 +213,39 @@ export default function ProviderWebhooks({
                         <li key={note}>{note}</li>
                       ))}
                     </ul>
+                  </div>
+                )}
+
+                {isGithub && (
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    {provider.enabled ? (
+                      <a
+                        href={githubManageUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center rounded border border-zinc-200 bg-white px-2 py-1 text-zinc-700 hover:border-zinc-300 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:border-zinc-500"
+                      >
+                        Manage installation
+                      </a>
+                    ) : (
+                      <button
+                        type="button"
+                        className="inline-flex items-center rounded border border-zinc-200 bg-white px-2 py-1 text-zinc-700 hover:border-zinc-300 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:border-zinc-500"
+                        onClick={() => {
+                          if (installUrl) {
+                            window.location.href = installUrl
+                          }
+                        }}
+                        disabled={!installUrl}
+                      >
+                        Install GitHub App
+                      </button>
+                    )}
+                    {!provider.enabled && provider.disabled_reason ? (
+                      <span className="text-zinc-500 dark:text-zinc-400">
+                        Reason: {provider.disabled_reason}
+                      </span>
+                    ) : null}
                   </div>
                 )}
 

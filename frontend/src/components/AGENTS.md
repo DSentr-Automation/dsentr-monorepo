@@ -98,3 +98,4 @@ Styles live in `src/css/globals.css` under `.themed-scroll` and were previously 
 - Workflow nodes: dashed summary areas now show an explicit click affordance (hover overlay + pointer cursor) and open the flyout on mouseup without interfering with node dragging, fixing missed flyout openings when using the on-card hint zone.
 - Delay and Formatter nodes now use the same dashed hint surface to open their flyouts, matching the rest of the node cards.
 - Settings > Integrations now maps `icon_key: "github"` to a GitHub logo component so the GitHub integration card renders its brand icon.
+- Provider Webhooks now shows Enabled/Disconnected status, optional disconnect reasons, and GitHub install/manage links driven by the backend webhook metadata.
