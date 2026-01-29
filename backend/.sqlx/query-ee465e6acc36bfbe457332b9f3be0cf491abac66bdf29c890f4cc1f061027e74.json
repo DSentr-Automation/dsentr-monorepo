@@ -1,0 +1,135 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE workspace_connections\n            SET\n                metadata = $2,\n                updated_at = now()\n            WHERE id = $1\n            RETURNING\n                id,\n                connection_id as \"connection_id?\",\n                workspace_id,\n                created_by,\n                owner_user_id,\n                user_oauth_token_id as \"user_oauth_token_id?\",\n                provider as \"provider: _\",\n                access_token,\n                refresh_token,\n                expires_at,\n                account_email,\n                created_at,\n                updated_at,\n                bot_user_id,\n                slack_team_id,\n                incoming_webhook_url,\n                metadata\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "connection_id?",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "workspace_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "created_by",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "owner_user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "user_oauth_token_id?",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "provider: _",
+        "type_info": {
+          "Custom": {
+            "name": "oauth_connection_provider",
+            "kind": {
+              "Enum": [
+                "google",
+                "microsoft",
+                "slack",
+                "asana",
+                "notion",
+                "bitly",
+                "raindrop",
+                "github"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "access_token",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "refresh_token",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "expires_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 10,
+        "name": "account_email",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 12,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 13,
+        "name": "bot_user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 14,
+        "name": "slack_team_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 15,
+        "name": "incoming_webhook_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 16,
+        "name": "metadata",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "ee465e6acc36bfbe457332b9f3be0cf491abac66bdf29c890f4cc1f061027e74"
+}
