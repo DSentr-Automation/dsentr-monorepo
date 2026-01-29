@@ -2051,13 +2051,15 @@ async fn filter_disabled_provider_triggers(
             continue;
         };
 
-        if !workspace_cache.contains_key(&workspace_id) {
+        if let std::collections::hash_map::Entry::Vacant(entry) =
+            workspace_cache.entry(workspace_id)
+        {
             let connections = app_state
                 .workspace_connection_repo
                 .list_by_workspace_and_provider(workspace_id, ConnectedOAuthProvider::GitHub)
                 .await
                 .unwrap_or_default();
-            workspace_cache.insert(workspace_id, connections);
+            entry.insert(connections);
         }
 
         let connections = workspace_cache

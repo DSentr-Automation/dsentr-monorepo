@@ -195,7 +195,6 @@ impl WorkspaceOAuthService {
                 installation_id: existing_metadata.installation_id.clone(),
                 installation_revoked: existing_metadata.installation_revoked,
                 disabled_at: existing_metadata.disabled_at,
-                ..Default::default()
             });
 
             let _ = self
@@ -235,7 +234,6 @@ impl WorkspaceOAuthService {
                 installation_id: existing_metadata.installation_id.clone(),
                 installation_revoked: existing_metadata.installation_revoked,
                 disabled_at: existing_metadata.disabled_at,
-                ..Default::default()
             })
         };
 
@@ -274,7 +272,6 @@ impl WorkspaceOAuthService {
                 installation_id: existing_metadata.installation_id.clone(),
                 installation_revoked: existing_metadata.installation_revoked,
                 disabled_at: existing_metadata.disabled_at,
-                ..Default::default()
             });
 
             let _ = self

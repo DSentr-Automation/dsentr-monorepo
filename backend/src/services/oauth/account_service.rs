@@ -66,7 +66,6 @@ pub struct AuthorizationTokens {
     pub slack: Option<SlackOAuthMetadata>,
     pub notion: Option<NotionOAuthMetadata>,
     pub installation_id: Option<String>,
-    installation_id: None,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -3036,14 +3035,6 @@ impl OAuthAccountService {
                 Err(sqlx::Error::RowNotFound)
             }
 
-            async fn update_metadata(
-                &self,
-                _connection_id: Uuid,
-                _metadata: serde_json::Value,
-            ) -> Result<WorkspaceConnection, sqlx::Error> {
-                Err(sqlx::Error::RowNotFound)
-            }
-
             async fn update_tokens_for_connection(
                 &self,
                 _connection_id: Uuid,
@@ -3710,15 +3701,9 @@ mod tests {
 
         async fn update_metadata(
             &self,
-            connection_id: Uuid,
-            metadata: serde_json::Value,
+            _connection_id: Uuid,
+            _metadata: serde_json::Value,
         ) -> Result<WorkspaceConnection, sqlx::Error> {
-            let mut guard = self.source_connections.lock().unwrap();
-            if let Some(conn) = guard.iter_mut().find(|conn| conn.id == connection_id) {
-                conn.metadata = metadata;
-                conn.updated_at = OffsetDateTime::now_utc();
-                return Ok(conn.clone());
-            }
             Err(Error::RowNotFound)
         }
 
@@ -4881,6 +4866,20 @@ mod tests {
             _slack_team_id: Option<String>,
             _incoming_webhook_url: Option<String>,
         ) -> Result<WorkspaceConnection, sqlx::Error> {
+            Err(Error::RowNotFound)
+        }
+
+        async fn update_metadata(
+            &self,
+            connection_id: Uuid,
+            metadata: serde_json::Value,
+        ) -> Result<WorkspaceConnection, sqlx::Error> {
+            let mut guard = self.source_connections.lock().unwrap();
+            if let Some(conn) = guard.iter_mut().find(|conn| conn.id == connection_id) {
+                conn.metadata = metadata;
+                conn.updated_at = OffsetDateTime::now_utc();
+                return Ok(conn.clone());
+            }
             Err(Error::RowNotFound)
         }
 

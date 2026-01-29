@@ -10,7 +10,7 @@ use super::{
 };
 use crate::{
     db::{
-        oauth_token_repository::NewUserOAuthToken,
+        oauth_token_repository::{NewUserOAuthToken, UserOAuthTokenRepository},
         postgres_oauth_token_repository::PostgresUserOAuthTokenRepository,
         postgres_provider_trigger_repository::PostgresProviderTriggerRepository,
         provider_trigger_repository::ProviderTriggerRepository,

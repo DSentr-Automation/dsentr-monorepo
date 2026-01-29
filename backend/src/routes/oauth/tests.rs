@@ -3073,6 +3073,7 @@ async fn callback_with_mismatched_state_redirects_with_error() {
         state: Some("unexpected".into()),
         error: None,
         error_description: None,
+        installation_id: None,
     };
 
     let response = handle_callback(
@@ -3469,6 +3470,7 @@ async fn github_callback_saves_personal_token() {
             state: Some(state_token.to_string()),
             error: None,
             error_description: None,
+            installation_id: None,
         }),
     )
     .await;
@@ -3538,6 +3540,7 @@ async fn notion_callback_saves_personal_token() {
             state: Some(state_token),
             error: None,
             error_description: None,
+            installation_id: None,
         }),
     )
     .await;
@@ -3610,6 +3613,7 @@ async fn notion_callback_handles_missing_fields() {
             state: Some(state_token),
             error: None,
             error_description: None,
+            installation_id: None,
         }),
     )
     .await;
@@ -3679,6 +3683,7 @@ async fn notion_callback_creates_personal_token_only() {
             state: Some(state_token),
             error: None,
             error_description: None,
+            installation_id: None,
         }),
     )
     .await;
@@ -3762,6 +3767,7 @@ async fn slack_callback_persists_team_id_from_auth_test() {
         state: Some(state_token),
         error: None,
         error_description: None,
+        installation_id: None,
     };
 
     let response = slack_connect_callback(
