@@ -26,6 +26,8 @@ struct ProviderWebhookMetadata {
     enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     disabled_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    app_url: Option<String>,
     webhook_endpoint: &'static str,
     delivery_deduplication: bool,
     trigger_source: &'static str,
@@ -97,6 +99,14 @@ pub async fn list_provider_webhooks(
 
     // Enabled is derived lazily from GitHub connection metadata; we only flip it off when
     // failures prove the installation is no longer valid.
+    let github_app_url = app_state
+        .config
+        .github_app
+        .app_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
     let mut enabled = false;
     let mut disabled_reason = None;
     for connection in connections {
@@ -119,6 +129,7 @@ pub async fn list_provider_webhooks(
         provider: "github",
         enabled,
         disabled_reason,
+        app_url: github_app_url,
         webhook_endpoint: "/webhooks/github",
         delivery_deduplication: true,
         trigger_source: "provider_triggers",

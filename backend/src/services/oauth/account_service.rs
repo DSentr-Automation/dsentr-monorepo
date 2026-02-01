@@ -4100,6 +4100,7 @@ mod tests {
             private_key: Some("key".into()),
             user_oauth_enabled: true,
             user_token_refresh_enabled: false,
+            app_url: None,
         };
 
         let service =
@@ -4183,6 +4184,7 @@ mod tests {
             private_key: Some("key".into()),
             user_oauth_enabled: true,
             user_token_refresh_enabled: true,
+            app_url: None,
         };
 
         let mut service =
@@ -4284,6 +4286,7 @@ mod tests {
             private_key: Some("key".into()),
             user_oauth_enabled: true,
             user_token_refresh_enabled: false,
+            app_url: None,
         };
 
         let mut service =

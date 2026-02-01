@@ -52,3 +52,4 @@
 - GitHub OAuth handling now enforces GitHub App user-token invariants (optional refresh, user-only tokens) with endpoint overrides and tests for refresh gating and refreshless connects.
 - GitHub OAuth exchange now warns when refresh is enabled but no refresh_token is returned so misconfigured GitHub App user OAuth settings are visible.
 - GitHub OAuth metadata now captures installation identifiers, propagates installation metadata to workspace connections on reconnect, and marks installations disabled on refresh failures to support lazy GitHub App connectivity checks.
+- OAuth service test fixtures now include the optional GitHub App URL field so GitHub App config stubs match the expanded settings shape.

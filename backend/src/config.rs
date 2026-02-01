@@ -34,6 +34,7 @@ pub struct GitHubAppSettings {
     pub private_key: Option<String>,
     pub user_oauth_enabled: bool,
     pub user_token_refresh_enabled: bool,
+    pub app_url: Option<String>,
 }
 
 impl GitHubAppSettings {
@@ -212,6 +213,7 @@ impl Config {
         let github_app_user_token_refresh_enabled =
             parse_env_bool("GITHUB_APP_USER_TOKEN_REFRESH_ENABLED", false)?;
         let github_app_user_oauth_enabled = parse_env_bool("GITHUB_APP_USER_OAUTH_ENABLED", false)?;
+        let github_app_url = parse_optional_env_string("GITHUB_APP_URL");
         let github_webhook_source_id = parse_optional_env_string("GITHUB_WEBHOOK_SOURCE_ID");
 
         let api_secrets_key_b64 = require_env("API_SECRETS_ENCRYPTION_KEY")?;
@@ -274,6 +276,7 @@ impl Config {
                 private_key: github_app_private_key,
                 user_oauth_enabled: github_app_user_oauth_enabled,
                 user_token_refresh_enabled: github_app_user_token_refresh_enabled,
+                app_url: github_app_url,
             },
             github_webhook_source_id,
             api_secrets_encryption_key,
@@ -508,7 +511,7 @@ mod tests {
         "RAINDROP_INTEGRATIONS_REDIRECT_URI",
     ];
 
-    const OPTIONAL_VARS: [&str; 10] = [
+    const OPTIONAL_VARS: [&str; 11] = [
         "AUTH_COOKIE_SECURE",
         "WORKSPACE_MEMBER_LIMIT",
         "WORKSPACE_MONTHLY_RUN_LIMIT",
@@ -519,6 +522,7 @@ mod tests {
         "GITHUB_APP_PRIVATE_KEY",
         "GITHUB_APP_USER_OAUTH_ENABLED",
         "GITHUB_APP_USER_TOKEN_REFRESH_ENABLED",
+        "GITHUB_APP_URL",
     ]; // allow tests to run without ambient overrides
 
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
@@ -640,6 +644,10 @@ mod tests {
         env::set_var("GITHUB_APP_USER_TOKEN_REFRESH_ENABLED", "true");
         env::set_var("GITHUB_APP_USER_OAUTH_ENABLED", "true");
         env::set_var(
+            "GITHUB_APP_URL",
+            "https://github.com/apps/dsentr-automation-actions-dev",
+        );
+        env::set_var(
             "API_SECRETS_ENCRYPTION_KEY",
             base64::engine::general_purpose::STANDARD.encode([1u8; 32]),
         );
@@ -689,6 +697,10 @@ mod tests {
                 .contains("BEGIN PRIVATE KEY"));
             assert!(config.github_app.user_token_refresh_enabled);
             assert!(config.github_app.user_oauth_enabled);
+            assert_eq!(
+                config.github_app.app_url.as_deref(),
+                Some("https://github.com/apps/dsentr-automation-actions-dev")
+            );
             assert!(config.auth_cookie_secure);
             assert_eq!(config.jwt_issuer, "dsentr.test");
             assert_eq!(config.jwt_audience, "dsentr.api");

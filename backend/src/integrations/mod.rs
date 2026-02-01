@@ -305,6 +305,7 @@ mod tests {
             private_key: None,
             user_oauth_enabled: true,
             user_token_refresh_enabled: false,
+            app_url: None,
         });
 
         let result = std::panic::catch_unwind(|| assert_github_app_settings(&config, &registry));
@@ -320,6 +321,7 @@ mod tests {
             private_key: Some("key".into()),
             user_oauth_enabled: false,
             user_token_refresh_enabled: false,
+            app_url: None,
         });
 
         let result = std::panic::catch_unwind(|| assert_github_app_settings(&config, &registry));

@@ -73,3 +73,4 @@
 - Legacy GitHub webhook ingress helpers remain in the codebase (marked dead code) to preserve the prior static workflow without wiring the endpoint.
 - Provider trigger execution planning now clones trigger node ids when de-duplicating GitHub webhook matches to avoid partial moves.
 - Settings now expose a read-only provider webhook metadata endpoint so the UI can explain shared provider webhooks without mutating state.
+- Config now reads `GITHUB_APP_URL` into GitHub App settings so downstream routes can surface the app install/manage link in Settings.
