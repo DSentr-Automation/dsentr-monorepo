@@ -128,4 +128,6 @@
 - GitHub App install callback now validates non-nil workspace ownership, logs state claims at debug, and adds the GitHub API version header for installation requests.
 - GitHub App install callback now has unit tests that validate JWT state claims and confirm unauthenticated, CSRF-free access to the callback route.
 - GitHub App install state parsing tests now decode with explicit JWT keys/issuer to avoid unnecessary DB pool setup; invalid-signature coverage now checks mismatched signing keys.
+- Provider webhook metadata now includes a signed GitHub App install state token so the frontend can launch the App install UI without touching OAuth.
+- GitHub App install state now uses the namespaced audience `dsentr.github.app.install`, and install state is only generated when GitHub App credentials are configured.
 - Route-level workspace connection stubs (Slack/Microsoft/Workspaces) now implement metadata updates to satisfy the expanded workspace connection repository trait.

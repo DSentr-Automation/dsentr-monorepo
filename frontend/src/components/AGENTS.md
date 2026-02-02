@@ -100,3 +100,5 @@ Styles live in `src/css/globals.css` under `.themed-scroll` and were previously 
 - Settings > Integrations now maps `icon_key: "github"` to a GitHub logo component so the GitHub integration card renders its brand icon.
 - Provider Webhooks now shows Enabled/Disconnected status, optional disconnect reasons, and GitHub install/manage links driven by the backend webhook metadata.
 - Provider Webhooks now surfaces the configured GitHub App URL as a deep link so users can jump to the app page from Settings.
+- Provider Webhooks now launches GitHub App installs via the app URL plus signed state (no OAuth), keeping install flow separate from user-token connections.
+- Provider Webhooks now hides the GitHub App install button unless both the app URL and install state are present, preventing misleading install actions when GitHub App config is missing.

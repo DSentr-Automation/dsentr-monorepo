@@ -18,7 +18,7 @@ use crate::utils::jwt::JwtKeys;
 
 const GITHUB_API_BASE: &str = "https://api.github.com";
 const GITHUB_APP_INSTALL_FLOW: &str = "github_app_install";
-const GITHUB_APP_STATE_AUDIENCE: &str = "github_app_install";
+const GITHUB_APP_STATE_AUDIENCE: &str = "dsentr.github.app.install";
 
 #[derive(Debug, Deserialize)]
 pub struct GitHubAppInstallCallbackQuery {

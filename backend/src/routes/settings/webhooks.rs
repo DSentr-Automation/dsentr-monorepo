@@ -2,8 +2,10 @@ use axum::{
     extract::{Query, State},
     response::{IntoResponse, Response},
 };
+use jsonwebtoken::{encode, Algorithm, Header};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
 use crate::responses::JsonResponse;
@@ -28,12 +30,23 @@ struct ProviderWebhookMetadata {
     disabled_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     app_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    install_state: Option<String>,
     webhook_endpoint: &'static str,
     delivery_deduplication: bool,
     trigger_source: &'static str,
     description: &'static str,
     setup_instructions: Vec<&'static str>,
     notes: Vec<&'static str>,
+}
+
+#[derive(Serialize)]
+struct GitHubAppInstallStateClaims {
+    flow: &'static str,
+    workspace_id: Uuid,
+    exp: usize,
+    iss: String,
+    aud: &'static str,
 }
 
 pub async fn list_provider_webhooks(
@@ -107,6 +120,21 @@ pub async fn list_provider_webhooks(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| value.to_string());
+    let install_state = match (
+        app_state.config.github_app.app_id,
+        app_state.config.github_app.private_key.as_deref(),
+    ) {
+        (Some(_), Some(private_key)) if !private_key.trim().is_empty() => {
+            match build_github_app_install_state(&app_state, workspace_id) {
+                Ok(state) => Some(state),
+                Err(err) => {
+                    tracing::error!(?err, %workspace_id, "failed to build GitHub App install state");
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
     let mut enabled = false;
     let mut disabled_reason = None;
     for connection in connections {
@@ -130,6 +158,7 @@ pub async fn list_provider_webhooks(
         enabled,
         disabled_reason,
         app_url: github_app_url,
+        install_state,
         webhook_endpoint: "/webhooks/github",
         delivery_deduplication: true,
         trigger_source: "provider_triggers",
@@ -152,4 +181,22 @@ pub async fn list_provider_webhooks(
         json!({ "providers": providers }),
     )
     .into_response()
+}
+
+fn build_github_app_install_state(app_state: &AppState, workspace_id: Uuid) -> Result<String, String> {
+    let exp = (OffsetDateTime::now_utc() + Duration::minutes(10)).unix_timestamp() as usize;
+    let claims = GitHubAppInstallStateClaims {
+        flow: "github_app_install",
+        workspace_id,
+        exp,
+        iss: app_state.config.jwt_issuer.clone(),
+        aud: "dsentr.github.app.install",
+    };
+
+    encode(
+        &Header::new(Algorithm::HS256),
+        &claims,
+        app_state.jwt_keys.encoding_key(),
+    )
+    .map_err(|err| format!("Failed to encode GitHub App install state: {err}"))
 }

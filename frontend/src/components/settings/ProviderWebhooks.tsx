@@ -8,6 +8,7 @@ type ProviderWebhookMetadata = {
   enabled: boolean
   disabled_reason?: string | null
   app_url?: string | null
+  install_state?: string | null
   webhook_endpoint: string
   delivery_deduplication: boolean
   trigger_source: string
@@ -127,13 +128,15 @@ export default function ProviderWebhooks({
             const howItWorks = providerHowItWorks(provider.provider)
             const isGithub = provider.provider.toLowerCase() === 'github'
             const githubAppUrl = isGithub
-              ? provider.app_url?.trim() || null
+              ? provider.app_url?.trim().replace(/\/$/, '') || null
               : null
-            // OAuth start records the installation_id so triggers can map back to this account.
+            const installState = isGithub
+              ? provider.install_state?.trim() || null
+              : null
             const installUrl =
-              isGithub && workspaceId
-                ? `${baseUrl}/api/oauth/github/start?workspace=${encodeURIComponent(
-                    workspaceId
+              githubAppUrl && installState
+                ? `${githubAppUrl}/installations/new?state=${encodeURIComponent(
+                    installState
                   )}`
                 : null
             const manageUrl = githubAppUrl ?? githubFallbackManageUrl
@@ -235,18 +238,17 @@ export default function ProviderWebhooks({
                       </a>
                     ) : (
                       <>
-                        <button
-                          type="button"
-                          className="inline-flex items-center rounded border border-zinc-200 bg-white px-2 py-1 text-zinc-700 hover:border-zinc-300 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:border-zinc-500"
-                          onClick={() => {
-                            if (installUrl) {
+                        {installUrl ? (
+                          <button
+                            type="button"
+                            className="inline-flex items-center rounded border border-zinc-200 bg-white px-2 py-1 text-zinc-700 hover:border-zinc-300 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:border-zinc-500"
+                            onClick={() => {
                               window.location.href = installUrl
-                            }
-                          }}
-                          disabled={!installUrl}
-                        >
-                          Install GitHub App
-                        </button>
+                            }}
+                          >
+                            Install GitHub App
+                          </button>
+                        ) : null}
                         {githubAppUrl ? (
                           <a
                             href={githubAppUrl}
