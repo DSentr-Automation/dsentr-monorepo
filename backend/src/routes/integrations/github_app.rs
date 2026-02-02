@@ -85,17 +85,17 @@ pub async fn github_app_install_callback(
         "GitHub App install callback received"
     );
 
-    if query.code.is_some() || query.error.is_some() {
+    if query.error.is_some() {
         error!(
             code_present = query.code.is_some(),
-            error_present = query.error.is_some(),
-            "GitHub App install callback received OAuth fields; refusing to proceed"
+            error_present = true,
+            "GitHub App install callback received error parameter; refusing to proceed"
         );
         return JsonResponse::bad_request(
             "GitHub App installation callback cannot accept OAuth parameters.",
         )
         .into_response();
-    };
+    }
 
     let installation_id = match query
         .installation_id
@@ -104,10 +104,22 @@ pub async fn github_app_install_callback(
     {
         Some(id) => id,
         None => {
+            if query.code.is_some() {
+                error!(
+                    code_present = true,
+                    "GitHub App install callback received OAuth code without installation_id"
+                );
+            }
             error!("GitHub App install callback missing installation_id");
             return JsonResponse::bad_request("Missing installation_id").into_response();
         }
     };
+    if query.code.is_some() {
+        info!(
+            installation_id = %installation_id,
+            "GitHub App install callback ignoring code parameter for installation flow"
+        );
+    }
 
     let state_raw = match query
         .state
@@ -925,6 +937,60 @@ mod tests {
 
         let uri = format!(
             "/api/integrations/github/app/callback?installation_id=123&state={}",
+            urlencoding::encode(&token)
+        );
+        let response = app
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .expect("request should succeed");
+
+        assert!(response.status().is_redirection());
+        let location = response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+        assert!(location.contains("settings/integrations/webhooks"));
+        assert!(location.contains("github_app_install=error"));
+        assert!(location.contains(&workspace_id.to_string()));
+    }
+
+    #[tokio::test]
+    async fn github_app_callback_accepts_code_with_installation_id() {
+        let workspace_id = Uuid::new_v4();
+        let owner_id = Uuid::new_v4();
+        let workspace_repo = StaticWorkspaceMembershipRepository::allowing();
+        workspace_repo.set_workspace_owner(workspace_id, owner_id);
+
+        let config = test_config(GitHubAppSettings {
+            app_id: Some(42),
+            private_key: None,
+            user_oauth_enabled: true,
+            user_token_refresh_enabled: false,
+            app_url: None,
+        });
+        let state = stub_state(config.clone(), Arc::new(workspace_repo));
+        let exp = (OffsetDateTime::now_utc() + Duration::minutes(5)).unix_timestamp() as usize;
+        let token = encode_state(
+            json!({
+                "flow": GITHUB_APP_INSTALL_FLOW,
+                "workspace_id": workspace_id,
+                "exp": exp,
+                "iss": config.jwt_issuer,
+                "aud": GITHUB_APP_STATE_AUDIENCE
+            }),
+            &state.jwt_keys,
+        );
+
+        let app = Router::new()
+            .route(
+                "/api/integrations/github/app/callback",
+                get(github_app_install_callback),
+            )
+            .with_state(state);
+
+        let uri = format!(
+            "/api/integrations/github/app/callback?installation_id=123&state={}&code=test",
             urlencoding::encode(&token)
         );
         let response = app
