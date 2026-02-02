@@ -308,6 +308,7 @@ pub async fn github_connect_callback(
     jar: CookieJar,
     Query(query): Query<CallbackQuery>,
 ) -> Response {
+    info!("GitHub OAuth callback received");
     let integration_id = GITHUB_INTEGRATION_ID;
     let (_manifest, provider) =
         match resolve_oauth_integration(state.integration_registry.as_ref(), integration_id) {

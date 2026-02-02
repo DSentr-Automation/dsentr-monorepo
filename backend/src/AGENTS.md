@@ -74,3 +74,5 @@
 - Provider trigger execution planning now clones trigger node ids when de-duplicating GitHub webhook matches to avoid partial moves.
 - Settings now expose a read-only provider webhook metadata endpoint so the UI can explain shared provider webhooks without mutating state.
 - Config now reads `GITHUB_APP_URL` into GitHub App settings so downstream routes can surface the app install/manage link in Settings.
+- Main router now mounts the GitHub App installation callback under `/api/integrations/github/app/callback` to keep installation handling separate from OAuth flows.
+- Main router now exposes the GitHub App installation callback outside the session guard so GitHub can reach it without user cookies.

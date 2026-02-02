@@ -58,7 +58,10 @@ use routes::{
     dashboard::dashboard_handler,
     early_access::handle_early_access,
     github_provider_webhooks::github_provider_webhook_ingress,
-    integrations::notion::{get_notion_database_schema, list_notion_databases},
+    integrations::{
+        github_app::github_app_install_callback,
+        notion::{get_notion_database_schema, list_notion_databases},
+    },
     issues::{
         get_issue_with_messages, list_user_issues, mark_issue_messages_read, reply_to_issue,
         submit_issue_report,
@@ -729,7 +732,10 @@ async fn main() -> Result<()> {
         .layer(csrf_layer.clone())
         .layer(session_guard.clone());
 
-    let integrations_routes = Router::new()
+    let integrations_public_routes =
+        Router::new().route("/github/app/callback", get(github_app_install_callback));
+
+    let integrations_private_routes = Router::new()
         .route("/notion/databases", get(list_notion_databases))
         .route(
             "/notion/databases/{database_id}/schema",
@@ -737,6 +743,8 @@ async fn main() -> Result<()> {
         )
         .layer(csrf_layer.clone())
         .layer(session_guard.clone());
+
+    let integrations_routes = integrations_public_routes.merge(integrations_private_routes);
 
     // Admin routes (CSRF + rate limit). Only Admin role may call these handlers.
     let admin_routes = Router::new()

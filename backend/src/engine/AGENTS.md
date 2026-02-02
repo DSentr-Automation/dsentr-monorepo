@@ -50,3 +50,4 @@
 - Provider trigger execution now uses the unmetered workflow-run creation helper so GitHub provider runs bypass quota enforcement while preserving system execution identity.
 - Provider trigger execution now treats `trigger_node_id` as an opaque string so non-UUID workflow node ids can seed `_start_from_node`.
 - GitHub provider trigger execution now skips runs when the associated installation is marked disabled, emitting a warning log with IDs only.
+- GitHub App installation tokens are short-lived; executors should re-exchange them via App JWT when expired or on 401, and only mark installations disabled after the re-exchange fails.

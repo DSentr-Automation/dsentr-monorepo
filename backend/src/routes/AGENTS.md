@@ -121,4 +121,10 @@
 - Added a read-only settings endpoint to list provider webhook metadata per workspace for the Webhooks UI.
 - Provider GitHub webhook ingress now skips dispatching triggers tied to disabled GitHub installations, and settings webhook metadata reflects enabled/disabled state with optional disconnect reasons.
 - Provider webhook metadata now exposes the configured GitHub App URL so the settings UI can deep-link to the app install/manage page.
+- Added a dedicated GitHub App installation callback under `/api/integrations/github/app/callback` that exchanges installation tokens, persists installation metadata, and redirects to the Webhooks settings tab without invoking OAuth user flows.
+- GitHub OAuth callbacks now emit an explicit log marker so install callbacks and OAuth callbacks are distinguishable in logs.
+- GitHub App install callback no longer requires an authenticated session; it validates workspace existence from signed state, treats installations as workspace-owned, and deep-merges installation metadata while marking tokens as `github_installation`.
+- GitHub App install callback now runs outside the session guard, logs its unauthenticated entry, and assigns new workspace connections to the workspace owner instead of a system placeholder.
+- GitHub App install callback now validates non-nil workspace ownership, logs state claims at debug, and adds the GitHub API version header for installation requests.
+- GitHub App install callback now has unit tests that validate JWT state claims and confirm unauthenticated, CSRF-free access to the callback route.
 - Route-level workspace connection stubs (Slack/Microsoft/Workspaces) now implement metadata updates to satisfy the expanded workspace connection repository trait.
