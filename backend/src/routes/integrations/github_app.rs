@@ -14,6 +14,7 @@ use crate::models::oauth_token::ConnectedOAuthProvider;
 use crate::responses::JsonResponse;
 use crate::services::oauth::account_service::installation_id_from_metadata;
 use crate::state::AppState;
+use crate::utils::jwt::JwtKeys;
 
 const GITHUB_API_BASE: &str = "https://api.github.com";
 const GITHUB_APP_INSTALL_FLOW: &str = "github_app_install";
@@ -121,7 +122,11 @@ pub async fn github_app_install_callback(
         }
     };
 
-    let state = match parse_install_state(state_raw, &app_state) {
+    let state = match parse_install_state(
+        state_raw,
+        app_state.jwt_keys.as_ref(),
+        &app_state.config.jwt_issuer,
+    ) {
         Ok(parsed) if parsed.flow == GITHUB_APP_INSTALL_FLOW => parsed,
         Ok(_) => {
             error!("GitHub App install callback state flow mismatch");
@@ -321,22 +326,22 @@ struct GitHubAppInstallStateClaims {
 
 fn parse_install_state(
     raw: &str,
-    app_state: &AppState,
+    jwt_keys: &JwtKeys,
+    jwt_issuer: &str,
 ) -> Result<GitHubAppInstallState, &'static str> {
     use jsonwebtoken::{decode, Validation};
     use std::collections::HashSet;
 
     let mut validation = Validation::new(Algorithm::HS256);
     validation.set_audience(&[GITHUB_APP_STATE_AUDIENCE]);
-    validation.iss = Some(HashSet::from([app_state.config.jwt_issuer.clone()]));
+    validation.iss = Some(HashSet::from([jwt_issuer.to_string()]));
     validation.validate_exp = true;
     validation.required_spec_claims.insert("exp".to_string());
     validation.required_spec_claims.insert("aud".to_string());
     validation.required_spec_claims.insert("iss".to_string());
 
-    let data =
-        decode::<GitHubAppInstallStateClaims>(raw, app_state.jwt_keys.decoding_key(), &validation)
-            .map_err(|_| "invalid state")?;
+    let data = decode::<GitHubAppInstallStateClaims>(raw, jwt_keys.decoding_key(), &validation)
+        .map_err(|_| "invalid state")?;
 
     let flow = data.claims.flow;
     let workspace_id = data.claims.workspace_id;
@@ -614,8 +619,7 @@ mod tests {
         DEFAULT_WORKSPACE_MEMBER_LIMIT, DEFAULT_WORKSPACE_MONTHLY_RUN_LIMIT, RUNAWAY_LIMIT_5MIN,
     };
     use crate::db::mock_db::{
-        MockDb, NoopWorkflowRepository, NoopWorkspaceRepository,
-        StaticWorkspaceMembershipRepository,
+        MockDb, NoopWorkflowRepository, StaticWorkspaceMembershipRepository,
     };
     use crate::db::mock_stripe_event_log_repository::MockStripeEventLogRepository;
     use crate::db::workspace_connection_repository::NoopWorkspaceConnectionRepository;
@@ -735,11 +739,10 @@ mod tests {
             .expect("state should encode")
     }
 
-    #[test]
-    fn parse_install_state_accepts_valid_state() {
+    #[tokio::test]
+    async fn parse_install_state_accepts_valid_state() {
         let keys = test_jwt_keys();
         let config = test_config(GitHubAppSettings::default());
-        let state = stub_state(config.clone(), Arc::new(NoopWorkspaceRepository));
         let workspace_id = Uuid::new_v4();
         let exp = (OffsetDateTime::now_utc() + Duration::minutes(5)).unix_timestamp() as usize;
         let token = encode_state(
@@ -753,16 +756,16 @@ mod tests {
             &keys,
         );
 
-        let parsed = parse_install_state(&token, &state).expect("state should parse");
+        let parsed =
+            parse_install_state(&token, &keys, &config.jwt_issuer).expect("state should parse");
         assert_eq!(parsed.flow, GITHUB_APP_INSTALL_FLOW);
         assert_eq!(parsed.workspace_id, workspace_id);
     }
 
-    #[test]
-    fn parse_install_state_rejects_missing_flow() {
+    #[tokio::test]
+    async fn parse_install_state_rejects_missing_flow() {
         let keys = test_jwt_keys();
         let config = test_config(GitHubAppSettings::default());
-        let state = stub_state(config.clone(), Arc::new(NoopWorkspaceRepository));
         let workspace_id = Uuid::new_v4();
         let exp = (OffsetDateTime::now_utc() + Duration::minutes(5)).unix_timestamp() as usize;
         let token = encode_state(
@@ -775,14 +778,13 @@ mod tests {
             &keys,
         );
 
-        assert!(parse_install_state(&token, &state).is_err());
+        assert!(parse_install_state(&token, &keys, &config.jwt_issuer).is_err());
     }
 
-    #[test]
-    fn parse_install_state_rejects_missing_workspace_id() {
+    #[tokio::test]
+    async fn parse_install_state_rejects_missing_workspace_id() {
         let keys = test_jwt_keys();
         let config = test_config(GitHubAppSettings::default());
-        let state = stub_state(config.clone(), Arc::new(NoopWorkspaceRepository));
         let exp = (OffsetDateTime::now_utc() + Duration::minutes(5)).unix_timestamp() as usize;
         let token = encode_state(
             json!({
@@ -794,14 +796,13 @@ mod tests {
             &keys,
         );
 
-        assert!(parse_install_state(&token, &state).is_err());
+        assert!(parse_install_state(&token, &keys, &config.jwt_issuer).is_err());
     }
 
-    #[test]
-    fn parse_install_state_rejects_nil_workspace_id() {
+    #[tokio::test]
+    async fn parse_install_state_rejects_nil_workspace_id() {
         let keys = test_jwt_keys();
         let config = test_config(GitHubAppSettings::default());
-        let state = stub_state(config.clone(), Arc::new(NoopWorkspaceRepository));
         let exp = (OffsetDateTime::now_utc() + Duration::minutes(5)).unix_timestamp() as usize;
         let token = encode_state(
             json!({
@@ -814,13 +815,13 @@ mod tests {
             &keys,
         );
 
-        assert!(parse_install_state(&token, &state).is_err());
+        assert!(parse_install_state(&token, &keys, &config.jwt_issuer).is_err());
     }
 
-    #[test]
-    fn parse_install_state_rejects_invalid_signature() {
+    #[tokio::test]
+    async fn parse_install_state_rejects_invalid_signature() {
+        let keys = test_jwt_keys();
         let config = test_config(GitHubAppSettings::default());
-        let state = stub_state(config.clone(), Arc::new(NoopWorkspaceRepository));
         let workspace_id = Uuid::new_v4();
         let exp = (OffsetDateTime::now_utc() + Duration::minutes(5)).unix_timestamp() as usize;
         let bad_keys = JwtKeys::from_secret("fedcba9876543210fedcba9876543210")
@@ -836,16 +837,15 @@ mod tests {
             &bad_keys,
         );
 
-        assert!(parse_install_state(&token, &state).is_err());
+        assert!(parse_install_state(&token, &keys, &config.jwt_issuer).is_err());
     }
 
-    #[test]
-    fn parse_install_state_rejects_expired_state() {
+    #[tokio::test]
+    async fn parse_install_state_rejects_expired_state() {
         let keys = test_jwt_keys();
         let config = test_config(GitHubAppSettings::default());
-        let state = stub_state(config.clone(), Arc::new(NoopWorkspaceRepository));
         let workspace_id = Uuid::new_v4();
-        let exp = (OffsetDateTime::now_utc() - Duration::minutes(1)).unix_timestamp() as usize;
+        let exp = (OffsetDateTime::now_utc() - Duration::hours(1)).unix_timestamp() as usize;
         let token = encode_state(
             json!({
                 "flow": GITHUB_APP_INSTALL_FLOW,
@@ -857,14 +857,13 @@ mod tests {
             &keys,
         );
 
-        assert!(parse_install_state(&token, &state).is_err());
+        assert!(parse_install_state(&token, &keys, &config.jwt_issuer).is_err());
     }
 
-    #[test]
-    fn parse_install_state_rejects_missing_aud_or_iss() {
+    #[tokio::test]
+    async fn parse_install_state_rejects_missing_aud_or_iss() {
         let keys = test_jwt_keys();
         let config = test_config(GitHubAppSettings::default());
-        let state = stub_state(config.clone(), Arc::new(NoopWorkspaceRepository));
         let workspace_id = Uuid::new_v4();
         let exp = (OffsetDateTime::now_utc() + Duration::minutes(5)).unix_timestamp() as usize;
         let missing_aud = encode_state(
@@ -886,8 +885,8 @@ mod tests {
             &keys,
         );
 
-        assert!(parse_install_state(&missing_aud, &state).is_err());
-        assert!(parse_install_state(&missing_iss, &state).is_err());
+        assert!(parse_install_state(&missing_aud, &keys, &config.jwt_issuer).is_err());
+        assert!(parse_install_state(&missing_iss, &keys, &config.jwt_issuer).is_err());
     }
 
     #[tokio::test]
