@@ -102,3 +102,4 @@ Styles live in `src/css/globals.css` under `.themed-scroll` and were previously 
 - Provider Webhooks now surfaces the configured GitHub App URL as a deep link so users can jump to the app page from Settings.
 - Provider Webhooks now launches GitHub App installs via the app URL plus signed state (no OAuth), keeping install flow separate from user-token connections.
 - Provider Webhooks now hides the GitHub App install button unless both the app URL and install state are present, preventing misleading install actions when GitHub App config is missing.
+- Provider Webhooks now offers a Reinstall GitHub App action even when the integration appears enabled, so users can re-initiate installs via the signed state URL after uninstalling in GitHub.

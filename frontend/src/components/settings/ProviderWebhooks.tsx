@@ -228,14 +228,27 @@ export default function ProviderWebhooks({
                 {isGithub && (
                   <div className="flex flex-wrap items-center gap-2 text-xs">
                     {provider.enabled ? (
-                      <a
-                        href={manageUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center rounded border border-zinc-200 bg-white px-2 py-1 text-zinc-700 hover:border-zinc-300 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:border-zinc-500"
-                      >
-                        Manage installation
-                      </a>
+                      <>
+                        {installUrl ? (
+                          <button
+                            type="button"
+                            className="inline-flex items-center rounded border border-zinc-200 bg-white px-2 py-1 text-zinc-700 hover:border-zinc-300 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:border-zinc-500"
+                            onClick={() => {
+                              window.location.href = installUrl
+                            }}
+                          >
+                            Reinstall GitHub App
+                          </button>
+                        ) : null}
+                        <a
+                          href={manageUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center rounded border border-zinc-200 bg-white px-2 py-1 text-zinc-700 hover:border-zinc-300 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:border-zinc-500"
+                        >
+                          Manage installation
+                        </a>
+                      </>
                     ) : (
                       <>
                         {installUrl ? (
