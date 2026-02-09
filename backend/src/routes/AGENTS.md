@@ -132,4 +132,5 @@
 - GitHub App install state now uses the namespaced audience `dsentr.github.app.install`, and install state is only generated when GitHub App credentials are configured.
 - GitHub App install callback now tolerates a `code` query parameter when an installation_id is present, logging the ignore path while still rejecting OAuth misroutes without installations.
 - GitHub App install callback now redirects to `/dashboard?settings=webhooks` instead of the non-existent `/settings/integrations/webhooks` route so the webhooks tab can open in the settings modal.
+- GitHub provider webhook ingress now logs secret length and signature/ body sizes when signature validation fails to ease webhook secret debugging without exposing sensitive values.
 - Route-level workspace connection stubs (Slack/Microsoft/Workspaces) now implement metadata updates to satisfy the expanded workspace connection repository trait.

@@ -101,9 +101,20 @@ pub(crate) async fn handle_github_provider_webhook_ingress(
         Ok(secret) => secret,
         Err(resp) => return resp,
     };
+    let signature_len = signature_header.len();
+    let signature_prefix_ok = signature_header
+        .trim()
+        .starts_with(GITHUB_SIGNATURE_PREFIX);
 
     if let Err(reason) = validate_github_signature(&secret, signature_header, body) {
-        warn!(reason, "github webhook signature validation failed");
+        warn!(
+            reason,
+            signature_len,
+            signature_prefix_ok,
+            body_len = body.len(),
+            secret_len = secret.len(),
+            "github webhook signature validation failed"
+        );
         return JsonResponse::forbidden(reason).into_response();
     }
 
@@ -380,6 +391,10 @@ fn resolve_github_webhook_secret() -> Result<String, Response> {
     let value = env::var(GITHUB_APP_WEBHOOK_SECRET_ENV).unwrap_or_default();
     let trimmed = value.trim();
     if !trimmed.is_empty() {
+        info!(
+            secret_len = trimmed.len(),
+            "GitHub webhook secret loaded"
+        );
         return Ok(trimmed.to_string());
     }
     error!("GitHub webhook secret not configured");
