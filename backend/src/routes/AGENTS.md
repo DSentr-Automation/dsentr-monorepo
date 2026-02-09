@@ -131,4 +131,5 @@
 - Provider webhook metadata now includes a signed GitHub App install state token so the frontend can launch the App install UI without touching OAuth.
 - GitHub App install state now uses the namespaced audience `dsentr.github.app.install`, and install state is only generated when GitHub App credentials are configured.
 - GitHub App install callback now tolerates a `code` query parameter when an installation_id is present, logging the ignore path while still rejecting OAuth misroutes without installations.
+- GitHub App install callback now redirects to `/dashboard?settings=webhooks` instead of the non-existent `/settings/integrations/webhooks` route so the webhooks tab can open in the settings modal.
 - Route-level workspace connection stubs (Slack/Microsoft/Workspaces) now implement metadata updates to satisfy the expanded workspace connection repository trait.

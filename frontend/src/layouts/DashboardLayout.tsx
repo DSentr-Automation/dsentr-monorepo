@@ -245,6 +245,10 @@ export default function DashboardLayout() {
       icon: settingsTabIcons[tab.key]
     }))
   }, [planTier])
+  const settingsTabKeys = useMemo(
+    () => settingsTabs.map((tab) => tab.key),
+    [settingsTabs]
+  )
 
   useEffect(() => {
     const params = new URLSearchParams(location.search)
@@ -283,6 +287,28 @@ export default function DashboardLayout() {
       { replace: true }
     )
   }, [location, navigate])
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const targetTab = params.get('settings')
+    if (!targetTab) return
+    if (!settingsTabKeys.includes(targetTab)) {
+      params.delete('settings')
+      navigate(
+        { pathname: location.pathname, search: params.toString() },
+        { replace: true }
+      )
+      return
+    }
+
+    setInitialSettingsTab(targetTab)
+    setSettingsOpen(true)
+    params.delete('settings')
+    navigate(
+      { pathname: location.pathname, search: params.toString() },
+      { replace: true }
+    )
+  }, [location.pathname, location.search, navigate, settingsTabKeys])
 
   useEffect(() => {
     const handler = (event: Event) => {

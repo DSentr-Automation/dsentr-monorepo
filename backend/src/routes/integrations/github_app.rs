@@ -602,7 +602,7 @@ fn deep_merge(existing: &Value, incoming: &Value) -> Value {
 
 fn build_success_redirect(app_state: &AppState, workspace_id: Uuid) -> String {
     format!(
-        "{}/settings/integrations/webhooks?workspace={}",
+        "{}/dashboard?settings=webhooks&workspace={}",
         app_state.config.frontend_origin, workspace_id
     )
 }
@@ -610,7 +610,7 @@ fn build_success_redirect(app_state: &AppState, workspace_id: Uuid) -> String {
 fn redirect_install_error(app_state: &AppState, workspace_id: Uuid, message: &str) -> Redirect {
     let encoded = urlencoding::encode(message);
     let url = format!(
-        "{}/settings/integrations/webhooks?workspace={}&github_app_install=error&message={}",
+        "{}/dashboard?settings=webhooks&workspace={}&github_app_install=error&message={}",
         app_state.config.frontend_origin, workspace_id, encoded
     );
     Redirect::to(&url)
@@ -950,7 +950,8 @@ mod tests {
             .get("location")
             .and_then(|value| value.to_str().ok())
             .unwrap_or("");
-        assert!(location.contains("settings/integrations/webhooks"));
+        assert!(location.contains("dashboard"));
+        assert!(location.contains("settings=webhooks"));
         assert!(location.contains("github_app_install=error"));
         assert!(location.contains(&workspace_id.to_string()));
     }
@@ -1004,7 +1005,8 @@ mod tests {
             .get("location")
             .and_then(|value| value.to_str().ok())
             .unwrap_or("");
-        assert!(location.contains("settings/integrations/webhooks"));
+        assert!(location.contains("dashboard"));
+        assert!(location.contains("settings=webhooks"));
         assert!(location.contains("github_app_install=error"));
         assert!(location.contains(&workspace_id.to_string()));
     }

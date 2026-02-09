@@ -248,6 +248,8 @@ Content Security Policy hardening:
 
 - Webhook regenerate modal visibility: the confirm modal in `src/components/settings/tabs/WebhooksTab.tsx` is now rendered with a fixed, viewport-level overlay (`fixed inset-0 z-50`) instead of being absolutely positioned inside the tab content. This ensures the modal appears centered and visible without scrolling on tall settings pages, particularly for workspace plans with longer content.
 
+- Dashboard now honors a `settings` query param (e.g., `settings=webhooks`) to open the Settings modal on the requested tab and clears the param after opening.
+
 - Webhooks tab now aligns ingress copy and examples to source endpoints and event_type routing to match unified webhook ingress.
 - Webhooks tab now includes a Webhook Sources section with list, create, rotate, and delete flows plus one-time secret reveal handling and endpoint copy actions.
 - Webhooks tab now includes per-source subscriptions lists and create/delete flows so routing can be managed from Settings.
