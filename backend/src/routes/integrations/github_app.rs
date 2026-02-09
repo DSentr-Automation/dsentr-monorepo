@@ -145,7 +145,12 @@ pub async fn github_app_install_callback(
             return JsonResponse::bad_request("Invalid state").into_response();
         }
         Err(err) => {
-            error!(?err, "GitHub App install callback state parse failed");
+            error!(
+                ?err,
+                issuer = %app_state.config.jwt_issuer,
+                audience = GITHUB_APP_STATE_AUDIENCE,
+                "GitHub App install callback state parse failed"
+            );
             return JsonResponse::bad_request("Invalid state").into_response();
         }
     };
@@ -340,7 +345,7 @@ fn parse_install_state(
     raw: &str,
     jwt_keys: &JwtKeys,
     jwt_issuer: &str,
-) -> Result<GitHubAppInstallState, &'static str> {
+) -> Result<GitHubAppInstallState, jsonwebtoken::errors::Error> {
     use jsonwebtoken::{decode, Validation};
     use std::collections::HashSet;
 
@@ -352,14 +357,15 @@ fn parse_install_state(
     validation.required_spec_claims.insert("aud".to_string());
     validation.required_spec_claims.insert("iss".to_string());
 
-    let data = decode::<GitHubAppInstallStateClaims>(raw, jwt_keys.decoding_key(), &validation)
-        .map_err(|_| "invalid state")?;
+    let data = decode::<GitHubAppInstallStateClaims>(raw, jwt_keys.decoding_key(), &validation)?;
 
     let flow = data.claims.flow;
     let workspace_id = data.claims.workspace_id;
 
     if flow.trim().is_empty() || workspace_id == Uuid::nil() {
-        return Err("invalid state");
+        return Err(jsonwebtoken::errors::Error::from(
+            jsonwebtoken::errors::ErrorKind::InvalidToken,
+        ));
     }
 
     Ok(GitHubAppInstallState { flow, workspace_id })
